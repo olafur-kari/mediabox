@@ -149,6 +149,15 @@
       color: var(--faint);
       font-size: 13px;
     }
+    .search-fav-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--faint); font-size: 14px; padding: 2px 4px; line-height: 1;
+      transition: color 0.15s;
+    }
+    .search-fav-btn:hover, .search-fav-btn.on { color: #f5a623; }
+    .empty-state-hint { font-size: 12px; color: var(--faint); margin-top: 8px; }
+    .empty-state-hint a { color: var(--accent); text-decoration: none; }
+    .empty-state-hint a:hover { text-decoration: underline; }
 
     /* User area */
     .appbar-user {
@@ -801,6 +810,11 @@ async function init() {
 
     updateSidebar();
     renderGroupList();
+    // Auto-select Favorites on load (it's the primary view)
+    activeGroup = 'favorites';
+    document.querySelectorAll('.group-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.group === 'favorites');
+    });
     renderChannels();
 
     // Poll health every 2 minutes
@@ -946,7 +960,7 @@ function renderChannels() {
   if (activeGroup === 'favorites') {
     const favChannels = allChannels.filter(ch => favorites.has(ch.id));
     if (!favChannels.length) {
-      list.innerHTML = `<div class="empty-state"><div class="empty-state-icon">⭐</div><div>No favorites yet — star a channel to add it here</div></div>`;
+      list.innerHTML = `<div class="empty-state"><div class="empty-state-icon">☆</div><div>No favorites yet</div><div class="empty-state-hint">Browse <a href="#" onclick="setGroup('all', document.querySelector('[data-group=all]')); return false;">All Channels</a> and tap ★ to add some</div></div>`;
       return;
     }
     displayGroups = [{ id: 'fav-v', name: 'Favorites', flag: '⭐', channels: favChannels, virtual: true }];
@@ -1057,6 +1071,12 @@ async function toggleFav(channelId) {
   try {
     await fetch(`/api/favorites/${channelId}`, { method: 'POST' });
   } catch (_) {}
+}
+
+async function toggleFavSearch(channelId, btn) {
+  await toggleFav(channelId);
+  btn.classList.toggle('on', favorites.has(channelId));
+  btn.title = favorites.has(channelId) ? 'Remove favorite' : 'Add to favorites';
 }
 
 async function toggleCurrentFav() {
@@ -1339,6 +1359,9 @@ function renderDropdown() {
             <div class="search-item-right">
               ${healthDot(best.health)}
               <span class="search-item-group">${ch.groupFlag || ''} ${escHtml(ch.groupName || '')}</span>
+              <button class="search-fav-btn ${favorites.has(ch.id) ? 'on' : ''}"
+                onclick="event.stopPropagation(); toggleFavSearch('${escHtml(ch.id)}', this)"
+                title="${favorites.has(ch.id) ? 'Remove favorite' : 'Add to favorites'}">★</button>
             </div>
           </div>
         `;
