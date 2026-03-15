@@ -261,6 +261,10 @@
       align-items: center;
       gap: 12px;
       margin-bottom: 20px;
+      cursor: pointer;
+    }
+    .now-bar:hover {
+      background: linear-gradient(135deg, rgba(88,166,255,0.12), rgba(163,113,247,0.12));
     }
     .live-dot {
       width: 8px;
@@ -702,7 +706,7 @@
 
   <!-- Main -->
   <main class="main">
-    <div class="now-bar" id="nowBar" style="display:none">
+    <div class="now-bar" id="nowBar" style="display:none" onclick="reopenPlayer(event)">
       <div class="live-dot"></div>
       <div class="now-info">
         <div class="now-label">Now Playing</div>
@@ -1257,6 +1261,11 @@ function stopPlaying() {
 
 function closePlayer() {
   document.getElementById('overlay').classList.remove('open');
+}
+
+function reopenPlayer(e) {
+  if (e.target.closest('.now-stop')) return;
+  if (currentChannelId) document.getElementById('overlay').classList.add('open');
 }
 
 function maybeClose(e) {
