@@ -1333,6 +1333,25 @@ function moveFocus(d, items) {
   items.forEach((el, i) => el.classList.toggle('focused', i === searchFocusIdx));
 }
 
+// Maps English/common names and country codes → Icelandic group name
+const COUNTRY_ALIASES = {
+  'iceland': 'ísland', 'is': 'ísland',
+  'norway': 'noregur', 'norge': 'noregur', 'no': 'noregur',
+  'sweden': 'svíþjóð', 'sverige': 'svíþjóð', 'se': 'svíþjóð',
+  'denmark': 'danmörk', 'danmark': 'danmörk', 'dk': 'danmörk',
+  'uk': 'bretland', 'britain': 'bretland', 'england': 'bretland', 'gb': 'bretland',
+  'greece': 'grikkland', 'hellas': 'grikkland', 'gr': 'grikkland',
+  'germany': 'þýskaland', 'deutschland': 'þýskaland', 'de': 'þýskaland',
+  'france': 'frakkland', 'fr': 'frakkland',
+  'spain': 'spánn', 'espana': 'spánn', 'españa': 'spánn', 'es': 'spánn',
+  'italy': 'ítalía', 'italia': 'ítalía', 'it': 'ítalía',
+  'netherlands': 'holland', 'dutch': 'holland', 'nl': 'holland',
+  'poland': 'pólland', 'polska': 'pólland', 'pl': 'pólland',
+  'portugal': 'portúgal', 'pt': 'portúgal',
+  'usa': 'bandaríkin', 'us': 'bandaríkin', 'america': 'bandaríkin',
+  'australia': 'ástralía', 'au': 'ástralía',
+};
+
 function scoreChannel(ch, q) {
   // Strip country prefix (e.g. "NO: NRK 1 HD" → "nrk 1 hd") for matching
   const stripped = ch.name.toLowerCase().replace(/^[a-z]{2}\s*:\s*/, '');
@@ -1346,11 +1365,19 @@ function scoreChannel(ch, q) {
   if (stripped.includes(q)) return 60;
   if (full.includes(q)) return 50;
   if (show.includes(q)) return 30;
-  if (group.includes(q)) return 10;
+  if (group.includes(q)) return 40;
 
   // Word-boundary match: any word in the name starts with query
   const words = stripped.split(/\s+/);
   if (words.some(w => w.startsWith(q))) return 55;
+
+  // Country alias match: "greece" → all channels in Grikkland group
+  const mappedGroup = COUNTRY_ALIASES[q];
+  if (mappedGroup && group === mappedGroup) return 40;
+  // Also handle partial alias match: "norw" → Noregur
+  for (const [alias, mapped] of Object.entries(COUNTRY_ALIASES)) {
+    if (alias.startsWith(q) && group === mapped) return 35;
+  }
 
   return 0;
 }
