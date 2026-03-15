@@ -1,4 +1,14 @@
 services:
+  threadfin:
+    image: fyb3roptik/threadfin:latest
+    container_name: threadfin
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - THREADFIN_PORT=34400
+    volumes:
+      - ./config/threadfin:/home/threadfin/.threadfin
+
   plex:
     image: plexinc/pms-docker:latest
     container_name: plex
