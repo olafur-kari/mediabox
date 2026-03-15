@@ -8,7 +8,7 @@ services:
     environment:
       - THREADFIN_PORT=34400
     volumes:
-      - ./config/threadfin:/home/threadfin/.threadfin
+      - ./config/threadfin:/home/threadfin/conf
 
   plex:
     image: plexinc/pms-docker:latest
