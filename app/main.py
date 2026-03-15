@@ -1,5 +1,7 @@
 import asyncio
 import os
+import secrets
+import string
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
@@ -14,6 +16,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.auth import (
     COOKIE_NAME,
     TOKEN_EXPIRE_DAYS,
+    add_user,
     create_token,
     get_current_user,
     hash_password,
@@ -362,3 +365,59 @@ async def api_provider_search(
     if len(q) < 2:
         return []
     return search_provider_channels(engine, q)
+
+
+# ── Admin API ─────────────────────────────────────────────────────────────────
+
+def _require_admin(current_user: dict = Depends(get_current_user)):
+    if not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return current_user
+
+
+def _generate_password(length: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+@app.get("/api/admin/users")
+async def api_admin_list_users(
+    current_user: dict = Depends(_require_admin),
+    session: Session = Depends(get_session),
+):
+    users = session.exec(select(User)).all()
+    return [
+        {"id": u.id, "username": u.username, "is_admin": u.is_admin,
+         "created_at": u.created_at.strftime("%Y-%m-%d") if u.created_at else None}
+        for u in users
+    ]
+
+
+@app.post("/api/admin/users")
+async def api_admin_create_user(
+    username: str = Form(...),
+    current_user: dict = Depends(_require_admin),
+    session: Session = Depends(get_session),
+):
+    existing = session.exec(select(User).where(User.username == username)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken")
+    password = _generate_password()
+    user = add_user(session, username, password)
+    return {"id": user.id, "username": user.username, "password": password}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def api_admin_delete_user(
+    user_id: int,
+    current_user: dict = Depends(_require_admin),
+    session: Session = Depends(get_session),
+):
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user["user_id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    session.delete(user)
+    session.commit()
+    return {"action": "deleted"}

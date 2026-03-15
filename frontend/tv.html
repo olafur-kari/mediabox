@@ -221,6 +221,37 @@
       transition: background 0.15s, color 0.15s;
     }
     .logout-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+    .settings-btn {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 16px; padding: 4px 8px; border-radius: 6px; transition: color 0.15s;
+    }
+    .settings-btn:hover { color: var(--text); }
+    .settings-box { width: 480px; }
+    .user-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+    .user-row {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px;
+    }
+    .user-row-name { flex: 1; font-size: 13px; font-weight: 500; }
+    .user-row-meta { font-size: 11px; color: var(--muted); }
+    .user-row-admin { font-size: 10px; color: var(--accent); font-weight: 600;
+      background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.2);
+      border-radius: 4px; padding: 1px 6px; }
+    .user-del-btn { background: none; border: none; color: var(--faint); cursor: pointer; font-size: 14px; padding: 2px 6px; }
+    .user-del-btn:hover { color: #f85149; }
+    .new-user-result {
+      background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.2);
+      border-radius: 8px; padding: 12px; margin-top: 4px;
+    }
+    .new-user-creds { font-size: 13px; margin-bottom: 8px; }
+    .new-user-creds strong { color: var(--text); }
+    .copy-btn {
+      background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.25);
+      border-radius: 6px; color: var(--accent); cursor: pointer;
+      font-size: 11px; font-weight: 600; padding: 4px 12px;
+    }
+    .copy-btn:hover { background: rgba(88,166,255,0.2); }
 
     /* ── Layout ── */
     .layout {
@@ -744,6 +775,7 @@
 
     <div class="appbar-user">
       <span class="appbar-username" id="usernameDisplay"></span>
+      <button class="settings-btn" id="settingsBtn" style="display:none" onclick="openSettings()" title="Settings">⚙</button>
       <form action="/api/auth/logout" method="post">
         <button class="logout-btn" type="submit">Sign out</button>
       </form>
@@ -793,6 +825,20 @@
       </div>
     </div>
   </main>
+</div>
+
+<!-- Settings Modal -->
+<div class="add-ch-overlay" id="settingsOverlay" onclick="closeSettings(event)">
+  <div class="add-ch-box settings-box" onclick="event.stopPropagation()">
+    <div class="add-ch-title">Users</div>
+    <div id="userList" class="user-list"></div>
+    <div class="add-ch-label" style="margin-top:12px">Add New User</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input class="add-ch-input" id="newUsername" type="text" placeholder="Username" style="flex:1"/>
+      <button class="add-ch-submit" onclick="createUser()">Add</button>
+    </div>
+    <div id="newUserResult" class="new-user-result" style="display:none"></div>
+  </div>
 </div>
 
 <!-- Add Channel Modal -->
@@ -875,6 +921,7 @@ async function init() {
 
     const me = await meResp.json();
     document.getElementById('usernameDisplay').textContent = me.username;
+    if (me.is_admin) document.getElementById('settingsBtn').style.display = '';
 
     const chData = await chResp.json();
     groups = chData.groups || [];
@@ -1629,6 +1676,65 @@ async function submitAddChannel() {
   } catch (_) {
     alert('Failed to add channel.');
   }
+}
+
+// ── Admin Settings ────────────────────────────────────────────────────────────
+
+async function openSettings() {
+  document.getElementById('newUserResult').style.display = 'none';
+  document.getElementById('newUsername').value = '';
+  document.getElementById('settingsOverlay').classList.add('open');
+  await loadUsers();
+}
+
+function closeSettings(e) {
+  if (e && e.target !== document.getElementById('settingsOverlay')) return;
+  document.getElementById('settingsOverlay').classList.remove('open');
+}
+
+async function loadUsers() {
+  const resp = await fetch('/api/admin/users');
+  const users = await resp.json();
+  document.getElementById('userList').innerHTML = users.map(u => `
+    <div class="user-row">
+      <div class="user-row-name">${escHtml(u.username)}</div>
+      ${u.is_admin ? '<span class="user-row-admin">admin</span>' : ''}
+      <span class="user-row-meta">${u.created_at || ''}</span>
+      ${u.is_admin ? '' : `<button class="user-del-btn" onclick="deleteUser(${u.id})" title="Remove">✕</button>`}
+    </div>
+  `).join('');
+}
+
+async function deleteUser(id) {
+  if (!confirm('Remove this user?')) return;
+  await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+  await loadUsers();
+}
+
+async function createUser() {
+  const username = document.getElementById('newUsername').value.trim();
+  if (!username) return;
+  const fd = new FormData();
+  fd.append('username', username);
+  const resp = await fetch('/api/admin/users', { method: 'POST', body: fd });
+  if (!resp.ok) {
+    const err = await resp.json();
+    alert(err.detail || 'Failed to create user');
+    return;
+  }
+  const user = await resp.json();
+  document.getElementById('newUsername').value = '';
+  const resultEl = document.getElementById('newUserResult');
+  resultEl.style.display = '';
+  resultEl.innerHTML = `
+    <div class="new-user-creds">
+      <strong>${escHtml(user.username)}</strong> — password: <strong>${escHtml(user.password)}</strong>
+    </div>
+    <button class="copy-btn" onclick="navigator.clipboard.writeText('Username: ${escHtml(user.username)}\\nPassword: ${escHtml(user.password)}\\nURL: https://pulse.tailbdcf8b.ts.net:8443')">
+      Copy login details
+    </button>
+  `;
+  await loadUsers();
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────

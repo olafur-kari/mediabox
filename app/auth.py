@@ -5,9 +5,17 @@ from typing import Optional
 from fastapi import Cookie, Depends, HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlmodel import Session, select
+from sqlmodel import Session, create_engine, select
 
 from app.models import User
+
+_engine = None
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = create_engine(f"sqlite:////data/mediabox.db", echo=False)
+    return _engine
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "insecure-default-change-me")
 ALGORITHM = "HS256"
@@ -52,7 +60,11 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
-    return {"user_id": int(payload["sub"]), "username": payload["username"]}
+    user_id = int(payload["sub"])
+    with Session(_get_engine()) as session:
+        user = session.get(User, user_id)
+        is_admin = user.is_admin if user else False
+    return {"user_id": user_id, "username": payload["username"], "is_admin": is_admin}
 
 
 def add_user(session: Session, username: str, password: str, is_admin: bool = False) -> User:
