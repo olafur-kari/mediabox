@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mediabox — Live TV v3</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
+    background: #0a0e14; color: #e6edf3; min-height: 100vh;
+  }
+
+  /* ── AppBar ── */
+  .appbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(10,14,20,0.92); backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0 24px;
+  }
+  .appbar-inner {
+    max-width: 1400px; margin: 0 auto;
+    display: flex; align-items: center; height: 56px; gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .brand-icon { font-size: 22px; }
+  .brand-name {
+    font-size: 16px; font-weight: 700; letter-spacing: -0.3px;
+    background: linear-gradient(135deg, #58a6ff 0%, #a371f7 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .search-wrap { flex: 1; max-width: 520px; position: relative; }
+  .search-icon-l {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: #484f58; font-size: 13px; pointer-events: none;
+  }
+  .search-input {
+    width: 100%; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+    padding: 9px 40px 9px 36px; color: #e6edf3; font-size: 13px; outline: none;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .search-input::placeholder { color: #484f58; }
+  .search-input:focus { border-color: rgba(88,166,255,0.5); background: rgba(88,166,255,0.04); }
+  .search-kbd {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: #484f58;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px; padding: 2px 6px; pointer-events: none;
+  }
+  .search-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+    background: #131922; border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5); z-index: 300; display: none;
+  }
+  .search-dropdown.open { display: block; }
+  .search-results-label {
+    font-size: 9px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #484f58; padding: 10px 14px 6px;
+  }
+  .search-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; cursor: pointer; transition: background 0.1s;
+    border-top: 1px solid rgba(255,255,255,0.03);
+  }
+  .search-item:hover, .search-item.focused { background: rgba(88,166,255,0.08); }
+  .search-item-logo {
+    width: 36px; height: 24px; border-radius: 5px;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; color: #8b949e; flex-shrink: 0;
+  }
+  .search-item-info { flex: 1; min-width: 0; }
+  .search-item-name { font-size: 13px; font-weight: 600; }
+  .search-item-name em { color: #58a6ff; font-style: normal; }
+  .search-item-meta { font-size: 11px; color: #8b949e; }
+  .search-item-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .search-item-group {
+    font-size: 10px; color: #484f58;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 4px; padding: 2px 7px;
+  }
+  .search-no-results { padding: 24px; text-align: center; color: #484f58; font-size: 13px; }
+
+  /* ── Layout ── */
+  .layout {
+    max-width: 1400px; margin: 0 auto; padding: 24px;
+    display: grid; grid-template-columns: 210px 1fr; gap: 20px;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 76px; align-self: start; }
+  .sidebar-label {
+    font-size: 9px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #484f58; padding: 8px 10px 4px;
+  }
+  .group-item {
+    display: flex; align-items: center; padding: 8px 10px;
+    border-radius: 8px; cursor: pointer; transition: background 0.15s;
+    gap: 8px; border: 1px solid transparent;
+  }
+  .group-item:hover { background: rgba(255,255,255,0.04); }
+  .group-item.active { background: rgba(88,166,255,0.1); border-color: rgba(88,166,255,0.2); }
+  .group-flag { font-size: 15px; flex-shrink: 0; }
+  .group-name { font-size: 12px; font-weight: 500; flex: 1; color: #c9d1d9; }
+  .group-item.active .group-name { color: #58a6ff; font-weight: 600; }
+  .group-count {
+    font-size: 10px; font-weight: 600; color: #484f58;
+    background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 10px;
+  }
+  .gfav-btn {
+    background: none; border: none; cursor: pointer; font-size: 11px;
+    color: #484f58; opacity: 0; transition: opacity 0.15s, color 0.15s; padding: 2px;
+  }
+  .group-item:hover .gfav-btn { opacity: 1; }
+  .gfav-btn.on { opacity: 1 !important; color: #f7a832; }
+  .sidebar-div { height: 1px; background: rgba(255,255,255,0.05); margin: 6px 4px; }
+
+  /* ── Main ── */
+  .main { min-width: 0; }
+  .now-bar {
+    background: linear-gradient(135deg, rgba(88,166,255,0.07), rgba(163,113,247,0.07));
+    border: 1px solid rgba(88,166,255,0.18); border-radius: 12px;
+    padding: 12px 16px; display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+  }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #f85149;
+    box-shadow: 0 0 8px rgba(248,81,73,0.6); animation: blink 1.4s ease-in-out infinite; flex-shrink: 0;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .now-info { flex: 1; min-width: 0; }
+  .now-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #58a6ff; }
+  .now-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .now-show { font-size: 11px; color: #8b949e; }
+  .now-stop {
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.2);
+    color: #f85149; border-radius: 6px; padding: 6px 14px;
+    font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  }
+
+  /* ── Group section ── */
+  .g-section { margin-bottom: 24px; }
+  .g-header {
+    display: flex; align-items: center; gap: 8px;
+    padding-bottom: 10px; margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .g-flag { font-size: 18px; }
+  .g-name { font-size: 13px; font-weight: 700; flex: 1; }
+  .g-count { font-size: 10px; color: #484f58; }
+  .g-pin {
+    background: none; border: none; cursor: pointer; font-size: 14px;
+    color: #484f58; transition: color 0.15s, transform 0.15s; padding: 4px;
+  }
+  .g-pin:hover { color: #f7a832; transform: scale(1.2); }
+  .g-pin.on { color: #f7a832; }
+  .g-toggle { background: none; border: none; cursor: pointer; color: #484f58; font-size: 11px; padding: 4px; }
+
+  /* ── Channel row ── */
+  .ch-list { display: flex; flex-direction: column; gap: 3px; }
+  .ch-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 10px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  }
+  .ch-row:hover { border-color: rgba(88,166,255,0.25); background: rgba(88,166,255,0.04); }
+  .ch-row.active { border-color: rgba(88,166,255,0.4); background: rgba(88,166,255,0.07); }
+  .ch-logo {
+    width: 44px; height: 30px; border-radius: 6px;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: #8b949e; flex-shrink: 0;
+  }
+  .ch-info { flex: 1; min-width: 0; }
+  .ch-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-show { font-size: 11px; color: #8b949e; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-badges { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+  /* ── Health dot ── */
+  .h-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    position: relative;
+  }
+  .h-dot.green { background: #3fb950; box-shadow: 0 0 5px rgba(63,185,80,0.5); }
+  .h-dot.yellow { background: #d29922; box-shadow: 0 0 5px rgba(210,153,34,0.5); }
+  .h-dot.red { background: #f85149; box-shadow: 0 0 5px rgba(248,81,73,0.5); }
+  .h-dot.unknown { background: #484f58; }
+
+  /* ── Backup badge ── */
+  .backup-badge {
+    font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+    background: rgba(163,113,247,0.1); color: #a371f7;
+    border: 1px solid rgba(163,113,247,0.2);
+    white-space: nowrap;
+  }
+
+  .ch-live { display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; color: #58a6ff; }
+  .ch-live-dot { width: 6px; height: 6px; border-radius: 50%; background: #f85149; animation: blink 1.4s ease-in-out infinite; }
+  .ch-fav {
+    background: none; border: none; cursor: pointer; font-size: 15px;
+    color: #484f58; transition: color 0.15s, transform 0.15s; padding: 4px; flex-shrink: 0;
+  }
+  .ch-fav:hover { color: #f7a832; transform: scale(1.2); }
+  .ch-fav.on { color: #f7a832; }
+
+  /* ── Player modal ── */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.88);
+    backdrop-filter: blur(10px); z-index: 200;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .overlay.open { opacity: 1; pointer-events: all; }
+  .player-box {
+    background: #131922; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; width: 100%; max-width: 900px; overflow: hidden;
+    transform: scale(0.95); transition: transform 0.2s;
+  }
+  .overlay.open .player-box { transform: scale(1); }
+  .player-screen {
+    background: #000; aspect-ratio: 16/9; position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .player-screen video { width: 100%; height: 100%; }
+  .spinner-wrap {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #484f58;
+  }
+  .spinner {
+    width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.08);
+    border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Stream picker ── */
+  .stream-picker {
+    padding: 12px 18px 0;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding-bottom: 12px;
+  }
+  .stream-picker-label {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #484f58; flex-shrink: 0;
+  }
+  .stream-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+    color: #8b949e; font-size: 12px; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .stream-btn:hover { background: rgba(255,255,255,0.07); color: #e6edf3; }
+  .stream-btn.active {
+    background: rgba(88,166,255,0.12); border-color: rgba(88,166,255,0.3); color: #58a6ff;
+  }
+  .stream-health-label {
+    font-size: 10px; font-weight: 600;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .health-tag {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600;
+  }
+  .health-tag.green { color: #3fb950; background: rgba(63,185,80,0.1); }
+  .health-tag.yellow { color: #d29922; background: rgba(210,153,34,0.1); }
+  .health-tag.red { color: #f85149; background: rgba(248,81,73,0.1); }
+  .stream-ms { font-size: 10px; color: #484f58; margin-left: auto; }
+
+  .player-bar {
+    padding: 14px 18px; display: flex; align-items: center; gap: 14px;
+  }
+  .player-logo {
+    width: 52px; height: 36px; border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #8b949e; flex-shrink: 0;
+  }
+  .player-meta { flex: 1; }
+  .player-name { font-size: 15px; font-weight: 700; }
+  .player-show { font-size: 12px; color: #8b949e; margin-top: 2px; }
+  .player-fav {
+    background: none; border: none; cursor: pointer; font-size: 20px;
+    color: #484f58; transition: color 0.15s; padding: 4px 10px;
+  }
+  .player-fav.on { color: #f7a832; }
+  .player-close {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+    color: #8b949e; border-radius: 8px; padding: 8px 16px;
+    font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.15s; flex-shrink: 0;
+  }
+  .player-close:hover { background: rgba(255,255,255,0.1); color: #e6edf3; }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- AppBar -->
+<header class="appbar">
+  <div class="appbar-inner">
+    <div class="brand">
+      <span class="brand-icon">📺</span>
+      <span class="brand-name">Mediabox</span>
+    </div>
+    <div class="search-wrap">
+      <span class="search-icon-l">🔍</span>
+      <input class="search-input" id="searchInput" type="text" placeholder="Search channels…  press / to focus" autocomplete="off">
+      <span class="search-kbd" id="searchKbd">/</span>
+      <div class="search-dropdown" id="searchDropdown"></div>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-label">Browse</div>
+    <div class="group-item active" onclick="setGroup('all',this)">
+      <span class="group-flag">🌐</span>
+      <span class="group-name">All Channels</span>
+      <span class="group-count">49</span>
+    </div>
+    <div class="group-item" onclick="setGroup('favorites',this)">
+      <span class="group-flag">⭐</span>
+      <span class="group-name">Favorites</span>
+      <span class="group-count" id="fav-cnt">0</span>
+    </div>
+    <div class="group-item" onclick="setGroup('recent',this)">
+      <span class="group-flag">🕐</span>
+      <span class="group-name">Recently Watched</span>
+    </div>
+    <div class="sidebar-div"></div>
+    <div class="sidebar-label">Groups</div>
+    <div class="group-item" onclick="setGroup('Iceland',this)">
+      <span class="group-flag">🇮🇸</span>
+      <span class="group-name">Iceland</span>
+      <span class="group-count">7</span>
+      <button class="gfav-btn" onclick="event.stopPropagation();toggleGPin(this,'iceland-g')">★</button>
+    </div>
+    <div class="group-item" onclick="setGroup('Iceland Sport',this)">
+      <span class="group-flag">🇮🇸</span>
+      <span class="group-name">Iceland Sport</span>
+      <span class="group-count">8</span>
+      <button class="gfav-btn" onclick="event.stopPropagation();toggleGPin(this,'iceland-sport-g')">★</button>
+    </div>
+    <div class="group-item" onclick="setGroup('UK Sport',this)">
+      <span class="group-flag">🇬🇧</span>
+      <span class="group-name">UK Sport</span>
+      <span class="group-count">11</span>
+      <button class="gfav-btn" onclick="event.stopPropagation();toggleGPin(this,'uk-sport-g')">★</button>
+    </div>
+    <div class="group-item" onclick="setGroup('UK',this)">
+      <span class="group-flag">🇬🇧</span>
+      <span class="group-name">United Kingdom</span>
+      <span class="group-count">7</span>
+      <button class="gfav-btn" onclick="event.stopPropagation();toggleGPin(this,'uk-g')">★</button>
+    </div>
+    <div class="group-item" onclick="setGroup('Greece',this)">
+      <span class="group-flag">🇬🇷</span>
+      <span class="group-name">Greece</span>
+      <span class="group-count">8</span>
+      <button class="gfav-btn" onclick="event.stopPropagation();toggleGPin(this,'greece-g')">★</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div class="now-bar" id="nowBar" style="display:none">
+      <div class="live-dot"></div>
+      <div class="now-info">
+        <div class="now-label">Now Playing</div>
+        <div class="now-name" id="nowName"></div>
+        <div class="now-show" id="nowShow"></div>
+      </div>
+      <button class="now-stop" onclick="stopPlaying()">■ Stop</button>
+    </div>
+    <div id="channelList"></div>
+  </main>
+</div>
+
+<!-- Player -->
+<div class="overlay" id="overlay" onclick="maybeClose(event)">
+  <div class="player-box" onclick="event.stopPropagation()">
+    <div class="player-screen">
+      <div class="spinner-wrap" id="spinnerWrap">
+        <div class="spinner"></div>
+        <span style="font-size:11px">Loading stream…</span>
+      </div>
+      <video id="vid" controls style="display:none"></video>
+    </div>
+
+    <!-- Stream picker -->
+    <div class="stream-picker" id="streamPicker"></div>
+
+    <div class="player-bar">
+      <div class="player-logo" id="pLogo"></div>
+      <div class="player-meta">
+        <div class="player-name" id="pName"></div>
+        <div class="player-show" id="pShow"></div>
+      </div>
+      <button class="player-fav" id="pFav" onclick="toggleCurrentFav()">★</button>
+      <button class="player-close" onclick="closePlayer()">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// health: 'green' | 'yellow' | 'red' | 'unknown'
+// streams: array of {label, url, health, ms}
+const GROUPS = [
+  { id:'iceland-g', name:'Iceland', flag:'🇮🇸', channels:[
+    { id:'ruv',   name:'IS: RÚV',        show:'Fréttir',              logo:'RÚV',  streams:[
+      { label:'Primary',  health:'green',  ms:112 },
+      { label:'Backup 1', health:'yellow', ms:380 },
+    ]},
+    { id:'ruv2',  name:'IS: RÚV 2',      show:'Kvikmynd',             logo:'RÚV2', streams:[
+      { label:'Primary',  health:'green',  ms:98  },
+    ]},
+    { id:'stod2', name:'IS: Stöð 2',     show:'Fréttir Stöðvar 2',    logo:'ST2',  streams:[
+      { label:'Primary',  health:'green',  ms:145 },
+      { label:'Backup 1', health:'green',  ms:201 },
+    ]},
+    { id:'stod2bio',name:'IS: Stöð 2 Bíó',show:'The Revenant (2015)', logo:'BÍÓ',  streams:[
+      { label:'Primary',  health:'red',    ms:null },
+      { label:'Backup 1', health:'green',  ms:167 },
+    ]},
+    { id:'stod3', name:'IS: Stöð 3',     show:'Þáttur',               logo:'ST3',  streams:[
+      { label:'Primary',  health:'yellow', ms:420 },
+    ]},
+    { id:'siminn',name:'IS: Síminn 1',   show:'Dagskrá',              logo:'SÍM',  streams:[
+      { label:'Primary',  health:'green',  ms:88  },
+    ]},
+    { id:'n4',    name:'IS: N4',         show:'Heimilisfólkið',        logo:'N4',   streams:[
+      { label:'Primary',  health:'unknown',ms:null },
+    ]},
+  ]},
+  { id:'iceland-sport-g', name:'Iceland Sport', flag:'🇮🇸', channels:[
+    { id:'syn1',  name:'IS: Syn Sport 1',      show:'Úrvalsdeildin: KR – Breiðablik',  logo:'SYN1', streams:[
+      { label:'Primary',  health:'green',  ms:134 },
+      { label:'Backup 1', health:'green',  ms:189 },
+    ]},
+    { id:'syn2',  name:'IS: Syn Sport 2',      show:'ATP Masters: Barcelona',          logo:'SYN2', streams:[
+      { label:'Primary',  health:'green',  ms:141 },
+    ]},
+    { id:'synvp', name:'IS: Syn Sport Viaplay',show:'Premier League: Arsenal–Chelsea', logo:'VP',   streams:[
+      { label:'Primary',  health:'green',  ms:109 },
+      { label:'Backup 1', health:'red',    ms:null },
+    ]},
+    { id:'euro-is',name:'IS: Eurosport 1',     show:'Cycling: Paris–Roubaix',         logo:'EURO', streams:[
+      { label:'Primary',  health:'yellow', ms:490 },
+      { label:'Backup 1', health:'green',  ms:201 },
+    ]},
+    { id:'synpl', name:'IS: Syn PL TV',        show:'Man City – Liverpool',            logo:'PL',   streams:[
+      { label:'Primary',  health:'green',  ms:119 },
+    ]},
+    { id:'synnba',name:'IS: Syn NBA TV',       show:'NBA: Lakers vs Celtics',          logo:'NBA',  streams:[
+      { label:'Primary',  health:'green',  ms:155 },
+    ]},
+  ]},
+  { id:'uk-sport-g', name:'UK Sport', flag:'🇬🇧', channels:[
+    { id:'sky-main',name:'UK: Sky Sport Main Event', show:'Liverpool – Tottenham',          logo:'SKY',  streams:[
+      { label:'Primary',  health:'green',  ms:98  },
+      { label:'Backup 1', health:'green',  ms:134 },
+      { label:'Backup 2', health:'yellow', ms:560 },
+    ]},
+    { id:'sky-f1',  name:'UK: Sky Sport F1',         show:'F1: Saudi GP – Qualifying',     logo:'F1',   streams:[
+      { label:'Primary',  health:'green',  ms:87  },
+      { label:'Backup 1', health:'green',  ms:145 },
+    ]},
+    { id:'sky-1',   name:'UK: Sky Sport 1',          show:'EFL Championship',              logo:'SKY1', streams:[
+      { label:'Primary',  health:'green',  ms:103 },
+    ]},
+    { id:'sky-2',   name:'UK: Sky Sport 2',          show:'Cricket: England vs India',     logo:'SKY2', streams:[
+      { label:'Primary',  health:'red',    ms:null },
+      { label:'Backup 1', health:'green',  ms:178 },
+    ]},
+    { id:'sky-golf',name:'UK: Sky Sport Golf',       show:'The Masters – Round 2',         logo:'GOLF', streams:[
+      { label:'Primary',  health:'green',  ms:112 },
+    ]},
+    { id:'tnt-1',   name:'UK: TNT Sport 1',          show:'UEFA CL: Real Madrid–Man City', logo:'TNT1', streams:[
+      { label:'Primary',  health:'green',  ms:96  },
+      { label:'Backup 1', health:'green',  ms:143 },
+    ]},
+    { id:'tnt-2',   name:'UK: TNT Sport 2',          show:'UEFA EL: Roma – Sevilla',       logo:'TNT2', streams:[
+      { label:'Primary',  health:'green',  ms:108 },
+    ]},
+    { id:'euro-uk1',name:'UK: Eurosport 1',          show:'Cycling: Paris–Roubaix',        logo:'EUR1', streams:[
+      { label:'Primary',  health:'yellow', ms:520 },
+      { label:'Backup 1', health:'green',  ms:167 },
+    ]},
+    { id:'euro-uk2',name:'UK: Eurosport 2',          show:'Tennis: WTA Madrid',            logo:'EUR2', streams:[
+      { label:'Primary',  health:'green',  ms:134 },
+    ]},
+  ]},
+  { id:'uk-g', name:'United Kingdom', flag:'🇬🇧', channels:[
+    { id:'bbc1',    name:'UK: BBC One',  show:'BBC News at Ten',    logo:'BBC1', streams:[{ label:'Primary', health:'green', ms:89  }]},
+    { id:'bbc2',    name:'UK: BBC Two',  show:'Newsnight',          logo:'BBC2', streams:[{ label:'Primary', health:'green', ms:103 }]},
+    { id:'itv',     name:'UK: ITV',      show:'Emmerdale',          logo:'ITV',  streams:[{ label:'Primary', health:'green', ms:95  }, { label:'Backup 1', health:'yellow', ms:410 }]},
+    { id:'ch4',     name:'UK: Channel 4',show:'Channel 4 News',    logo:'CH4',  streams:[{ label:'Primary', health:'green', ms:112 }]},
+    { id:'skynews', name:'UK: Sky News', show:'Breaking News',      logo:'NEWS', streams:[{ label:'Primary', health:'green', ms:77  }, { label:'Backup 1', health:'green', ms:143 }]},
+    { id:'bbcnews', name:'UK: BBC News', show:'World News Today',   logo:'BBCN', streams:[{ label:'Primary', health:'green', ms:91  }]},
+  ]},
+  { id:'greece-g', name:'Greece', flag:'🇬🇷', channels:[
+    { id:'ert1', name:'GR: ERT1',         show:'Ειδήσεις',                          logo:'ERT1', streams:[{ label:'Primary', health:'green',  ms:203 }]},
+    { id:'ert2', name:'GR: ERT2',         show:'Ταινία',                            logo:'ERT2', streams:[{ label:'Primary', health:'yellow', ms:480 }]},
+    { id:'mega', name:'GR: MEGA',         show:'Κεντρικό Δελτίο',                   logo:'MEGA', streams:[{ label:'Primary', health:'green',  ms:198 }, { label:'Backup 1', health:'green', ms:241 }]},
+    { id:'ant1', name:'GR: ANT1',         show:'Survivor',                          logo:'ANT1', streams:[{ label:'Primary', health:'green',  ms:211 }]},
+    { id:'skai', name:'GR: SKAI',         show:'Ειδήσεις SKAI',                     logo:'SKAI', streams:[{ label:'Primary', health:'red',    ms:null }]},
+    { id:'cos1', name:'GR: Cosmote Sport 1', show:'Super League: PAOK – Olympiakos',logo:'COS1', streams:[{ label:'Primary', health:'green',  ms:189 }, { label:'Backup 1', health:'green', ms:256 }]},
+    { id:'cos2', name:'GR: Cosmote Sport 2', show:'Super League: AEK – Panat.',     logo:'COS2', streams:[{ label:'Primary', health:'green',  ms:201 }]},
+    { id:'nova1',name:'GR: Nova Sports 1',   show:'NBA Highlights',                 logo:'NOVA', streams:[{ label:'Primary', health:'unknown',ms:null }]},
+  ]},
+];
+
+const ALL = GROUPS.flatMap(g => g.channels.map(ch => ({...ch, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
+
+let favs      = new Set(JSON.parse(localStorage.getItem('mb3-favs') || '[]'));
+let favGroups = new Set(JSON.parse(localStorage.getItem('mb3-fav-groups') || '[]'));
+let recent    = JSON.parse(localStorage.getItem('mb3-recent') || '[]');
+let activeGroup = 'all';
+let currentChId = null;
+let activeStreamIdx = 0;
+let searchFocusIdx = -1;
+
+function save() {
+  localStorage.setItem('mb3-favs', JSON.stringify([...favs]));
+  localStorage.setItem('mb3-fav-groups', JSON.stringify([...favGroups]));
+  localStorage.setItem('mb3-recent', JSON.stringify(recent));
+}
+
+// ── Health helpers ──
+function healthDot(h) {
+  return `<span class="h-dot ${h}" title="${h}"></span>`;
+}
+function healthTag(h, ms) {
+  const labels = { green:'Healthy', yellow:'Slow', red:'Down', unknown:'Unknown' };
+  const msStr = ms ? `${ms}ms` : '—';
+  return `<span class="health-tag ${h}">${healthDot(h)} ${labels[h]}</span><span class="stream-ms">${msStr}</span>`;
+}
+
+// best stream = first green, else first yellow, else first
+function bestStream(streams) {
+  return streams.findIndex(s => s.health === 'green') ??
+         streams.findIndex(s => s.health === 'yellow') ?? 0;
+}
+
+// ── Search ──
+const searchInput    = document.getElementById('searchInput');
+const searchDropdown = document.getElementById('searchDropdown');
+const searchKbd      = document.getElementById('searchKbd');
+
+searchInput.addEventListener('input', renderDropdown);
+searchInput.addEventListener('focus', () => { searchKbd.style.display='none'; renderDropdown(); });
+searchInput.addEventListener('blur', () => {
+  setTimeout(() => { searchDropdown.classList.remove('open'); searchKbd.style.display=''; }, 160);
+});
+searchInput.addEventListener('keydown', e => {
+  const items = searchDropdown.querySelectorAll('.search-item');
+  if      (e.key==='ArrowDown') { e.preventDefault(); moveFocus(1,items); }
+  else if (e.key==='ArrowUp')   { e.preventDefault(); moveFocus(-1,items); }
+  else if (e.key==='Enter') { const f=searchDropdown.querySelector('.search-item.focused'); if(f)f.click(); }
+  else if (e.key==='Escape') { searchInput.blur(); }
+});
+function moveFocus(d, items) {
+  searchFocusIdx = Math.max(-1, Math.min(items.length-1, searchFocusIdx+d));
+  items.forEach((el,i) => el.classList.toggle('focused', i===searchFocusIdx));
+}
+function hl(text, q) {
+  if (!q) return text;
+  return text.replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi'), '<em>$1</em>');
+}
+function renderDropdown() {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { searchDropdown.classList.remove('open'); return; }
+  searchFocusIdx = -1;
+  const res = ALL.filter(ch => ch.name.toLowerCase().includes(q) || ch.show.toLowerCase().includes(q)).slice(0,10);
+  if (!res.length) {
+    searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${q}</strong>"</div>`;
+  } else {
+    const best = (ch) => ch.streams[bestStream(ch.streams)];
+    searchDropdown.innerHTML = `
+      <div class="search-results-label">${res.length} channel${res.length>1?'s':''}</div>
+      ${res.map(ch => `
+        <div class="search-item" onclick="playChannel('${ch.id}');searchInput.value='';searchDropdown.classList.remove('open')">
+          <div class="search-item-logo">${ch.logo}</div>
+          <div class="search-item-info">
+            <div class="search-item-name">${hl(ch.name, q)}</div>
+            <div class="search-item-meta">${ch.show}</div>
+          </div>
+          <div class="search-item-right">
+            ${healthDot(best(ch).health)}
+            <span class="search-item-group">${ch.groupFlag} ${ch.groupName}</span>
+          </div>
+        </div>
+      `).join('')}
+    `;
+  }
+  searchDropdown.classList.add('open');
+}
+
+// ── Main render ──
+function render() {
+  document.getElementById('fav-cnt').textContent = favs.size;
+  let groups;
+  if (activeGroup==='favorites') {
+    const fch = ALL.filter(ch => favs.has(ch.id));
+    groups = [{ id:'fav-v', name:'Favorites', flag:'⭐', channels: fch, virtual:true }];
+  } else if (activeGroup==='recent') {
+    const rch = recent.map(id => ALL.find(ch=>ch.id===id)).filter(Boolean);
+    groups = [{ id:'rec-v', name:'Recently Watched', flag:'🕐', channels: rch, virtual:true }];
+  } else if (activeGroup==='all') {
+    groups = [...GROUPS].sort((a,b) => (favGroups.has(b.id)?1:0)-(favGroups.has(a.id)?1:0));
+  } else {
+    groups = GROUPS.filter(g => g.name.includes(activeGroup));
+  }
+
+  const list = document.getElementById('channelList');
+  list.innerHTML = '';
+
+  groups.forEach(group => {
+    if (!group.channels.length) return;
+    let channels = group.virtual ? group.channels :
+      [...group.channels].sort((a,b) => (favs.has(b.id)?1:0)-(favs.has(a.id)?1:0));
+    const isPinned = favGroups.has(group.id);
+    const sec = document.createElement('div');
+    sec.className = 'g-section';
+    sec.innerHTML = `
+      <div class="g-header">
+        <span class="g-flag">${group.flag}</span>
+        <span class="g-name">${group.name}</span>
+        <span class="g-count">${channels.length} channels</span>
+        ${!group.virtual ? `<button class="g-pin ${isPinned?'on':''}" onclick="toggleGPinId('${group.id}')" title="Pin to top">${isPinned?'★':'☆'}</button>` : ''}
+        <button class="g-toggle" onclick="toggleCollapse(this,'${group.id}')">▾</button>
+      </div>
+      <div class="ch-list" id="cl-${group.id}">
+        ${channels.map(ch => {
+          const primaryHealth = ch.streams[0].health;
+          const hasBackups = ch.streams.length > 1;
+          const isFav = favs.has(ch.id);
+          const isPlaying = currentChId === ch.id;
+          return `
+            <div class="ch-row ${isPlaying?'active':''}" onclick="playChannel('${ch.id}')">
+              <div class="ch-logo">${ch.logo}</div>
+              <div class="ch-info">
+                <div class="ch-name">${ch.name}</div>
+                <div class="ch-show">${ch.show}</div>
+              </div>
+              <div class="ch-badges">
+                ${isPlaying ? `<div class="ch-live"><div class="ch-live-dot"></div>LIVE</div>` : ''}
+                ${healthDot(primaryHealth)}
+                ${hasBackups ? `<span class="backup-badge">+${ch.streams.length-1} backup</span>` : ''}
+              </div>
+              <button class="ch-fav ${isFav?'on':''}" onclick="event.stopPropagation();toggleFav('${ch.id}')" title="${isFav?'Remove':'Add'} favorite">★</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+    list.appendChild(sec);
+  });
+}
+
+function toggleCollapse(btn, gid) {
+  const el = document.getElementById('cl-'+gid);
+  const hidden = el.style.display==='none';
+  el.style.display = hidden ? '' : 'none';
+  btn.textContent = hidden ? '▾' : '▸';
+}
+function toggleGPinId(gid) {
+  favGroups.has(gid) ? favGroups.delete(gid) : favGroups.add(gid);
+  save(); render();
+}
+function toggleGPin(btn, gid) {
+  btn.classList.toggle('on');
+  toggleGPinId(gid);
+}
+function setGroup(g, el) {
+  activeGroup = g;
+  document.querySelectorAll('.group-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  render();
+}
+function toggleFav(id) {
+  favs.has(id) ? favs.delete(id) : favs.add(id);
+  save(); render();
+}
+
+// ── Playback ──
+function playChannel(id) {
+  const ch = ALL.find(c => c.id===id);
+  if (!ch) return;
+  currentChId = id;
+  recent = [id, ...recent.filter(r=>r!==id)].slice(0,10);
+  save();
+
+  // Auto-select best stream
+  activeStreamIdx = bestStream(ch.streams);
+
+  document.getElementById('nowBar').style.display = 'flex';
+  document.getElementById('nowName').textContent = ch.name;
+  document.getElementById('nowShow').textContent = ch.show;
+
+  document.getElementById('pLogo').textContent = ch.logo;
+  document.getElementById('pName').textContent = ch.name;
+  document.getElementById('pShow').textContent = ch.show;
+  document.getElementById('pFav').className = `player-fav ${favs.has(id)?'on':''}`;
+
+  renderStreamPicker(ch);
+
+  document.getElementById('spinnerWrap').style.display = 'flex';
+  document.getElementById('vid').style.display = 'none';
+  document.getElementById('overlay').classList.add('open');
+
+  setTimeout(() => {
+    document.getElementById('spinnerWrap').style.display = 'none';
+    document.getElementById('vid').style.display = 'block';
+  }, 1400);
+
+  render();
+}
+
+function renderStreamPicker(ch) {
+  const picker = document.getElementById('streamPicker');
+  if (ch.streams.length <= 1) {
+    // single stream: just show health
+    const s = ch.streams[0];
+    picker.innerHTML = `
+      <span class="stream-picker-label">Stream</span>
+      ${healthTag(s.health, s.ms)}
+    `;
+  } else {
+    picker.innerHTML = `
+      <span class="stream-picker-label">Streams</span>
+      ${ch.streams.map((s, i) => `
+        <button class="stream-btn ${i===activeStreamIdx?'active':''}" onclick="switchStream(${i})">
+          ${healthDot(s.health)} ${s.label}
+        </button>
+      `).join('')}
+      <span style="flex:1"></span>
+      ${healthTag(ch.streams[activeStreamIdx].health, ch.streams[activeStreamIdx].ms)}
+    `;
+  }
+}
+
+function switchStream(idx) {
+  const ch = ALL.find(c => c.id===currentChId);
+  if (!ch) return;
+  activeStreamIdx = idx;
+  document.getElementById('spinnerWrap').style.display = 'flex';
+  document.getElementById('vid').style.display = 'none';
+  setTimeout(() => {
+    document.getElementById('spinnerWrap').style.display = 'none';
+    document.getElementById('vid').style.display = 'block';
+  }, 900);
+  renderStreamPicker(ch);
+}
+
+function stopPlaying() {
+  currentChId = null;
+  document.getElementById('nowBar').style.display = 'none';
+  render();
+}
+function closePlayer() { document.getElementById('overlay').classList.remove('open'); }
+function maybeClose(e) { if (e.target===document.getElementById('overlay')) closePlayer(); }
+function toggleCurrentFav() {
+  if (!currentChId) return;
+  toggleFav(currentChId);
+  document.getElementById('pFav').className = `player-fav ${favs.has(currentChId)?'on':''}`;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key==='/' && document.activeElement!==searchInput) { e.preventDefault(); searchInput.focus(); }
+  if (e.key==='Escape') {
+    if (document.getElementById('overlay').classList.contains('open')) closePlayer();
+  }
+});
+
+render();
+</script>
+</body>
+</html>

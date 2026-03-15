@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mediabox — Live TV</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
+    background: #0a0e14;
+    color: #e6edf3;
+    min-height: 100vh;
+  }
+
+  /* ── AppBar ── */
+  .appbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(10,14,20,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 0 24px;
+  }
+  .appbar-inner {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    height: 56px;
+    gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .brand-icon { font-size: 22px; }
+  .brand-name {
+    font-size: 16px; font-weight: 700; letter-spacing: -0.3px;
+    background: linear-gradient(135deg, #58a6ff 0%, #a371f7 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .appbar-search {
+    flex: 1;
+    max-width: 480px;
+    position: relative;
+  }
+  .search-icon {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: #484f58; font-size: 14px; pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 8px 12px 8px 36px;
+    color: #e6edf3;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .search-input::placeholder { color: #484f58; }
+  .search-input:focus {
+    border-color: rgba(88,166,255,0.4);
+    background: rgba(88,166,255,0.05);
+  }
+  .search-shortcut {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: #484f58;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    padding: 2px 6px;
+    pointer-events: none;
+  }
+  .appbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .quality-filter {
+    display: flex;
+    gap: 2px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .q-btn {
+    font-size: 10px; font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: none; cursor: pointer;
+    background: transparent; color: #8b949e;
+    transition: all 0.15s;
+    letter-spacing: 0.3px;
+  }
+  .q-btn.active { background: rgba(88,166,255,0.15); color: #58a6ff; }
+
+  /* ── Layout ── */
+  .layout {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 20px;
+    min-height: calc(100vh - 56px);
+  }
+
+  /* ── Sidebar ── */
+  .sidebar { display: flex; flex-direction: column; gap: 6px; }
+  .sidebar-section-label {
+    font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: #484f58;
+    padding: 8px 10px 4px;
+  }
+  .group-item {
+    display: flex; align-items: center;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    gap: 8px;
+    border: 1px solid transparent;
+    position: relative;
+  }
+  .group-item:hover { background: rgba(255,255,255,0.04); }
+  .group-item.active {
+    background: rgba(88,166,255,0.1);
+    border-color: rgba(88,166,255,0.2);
+  }
+  .group-flag { font-size: 16px; flex-shrink: 0; }
+  .group-name { font-size: 12px; font-weight: 500; flex: 1; color: #c9d1d9; }
+  .group-item.active .group-name { color: #58a6ff; }
+  .group-count {
+    font-size: 10px; font-weight: 600;
+    color: #484f58;
+    background: rgba(255,255,255,0.05);
+    padding: 1px 6px; border-radius: 10px;
+  }
+  .group-fav {
+    background: none; border: none; cursor: pointer;
+    font-size: 12px; color: #484f58;
+    opacity: 0; transition: opacity 0.15s, color 0.15s;
+    padding: 2px;
+  }
+  .group-item:hover .group-fav { opacity: 1; }
+  .group-fav.active { opacity: 1; color: #f7a832; }
+  .sidebar-divider {
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+    margin: 6px 0;
+  }
+
+  /* ── Main content ── */
+  .main { min-width: 0; }
+
+  /* ── Currently playing banner ── */
+  .now-playing-bar {
+    background: linear-gradient(135deg, rgba(88,166,255,0.08) 0%, rgba(163,113,247,0.08) 100%);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .now-playing-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #f85149;
+    box-shadow: 0 0 8px rgba(248,81,73,0.6);
+    animation: pulse 1.5s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+  .now-playing-info { flex: 1; min-width: 0; }
+  .now-playing-label { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #58a6ff; }
+  .now-playing-name { font-size: 14px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .now-playing-show { font-size: 11px; color: #8b949e; }
+  .now-playing-stop {
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.25);
+    color: #f85149; border-radius: 6px; padding: 6px 14px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .now-playing-stop:hover { background: rgba(248,81,73,0.2); }
+
+  /* ── Group section ── */
+  .group-section { margin-bottom: 28px; }
+  .group-header {
+    display: flex; align-items: center;
+    padding: 0 0 10px;
+    gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 10px;
+  }
+  .group-header-flag { font-size: 20px; }
+  .group-header-name { font-size: 13px; font-weight: 700; color: #e6edf3; flex: 1; }
+  .group-header-count { font-size: 10px; color: #484f58; }
+  .group-header-fav {
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: #484f58;
+    transition: color 0.15s, transform 0.15s;
+    padding: 4px;
+  }
+  .group-header-fav:hover { color: #f7a832; transform: scale(1.2); }
+  .group-header-fav.active { color: #f7a832; }
+  .group-collapse {
+    background: none; border: none; cursor: pointer;
+    color: #484f58; font-size: 12px; padding: 4px;
+    transition: color 0.15s;
+  }
+  .group-collapse:hover { color: #8b949e; }
+
+  /* ── Channel rows ── */
+  .channels { display: flex; flex-direction: column; gap: 4px; }
+  .channel-row {
+    display: grid;
+    grid-template-columns: 44px 1fr auto auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .channel-row:hover {
+    border-color: rgba(88,166,255,0.25);
+    background: rgba(88,166,255,0.04);
+  }
+  .channel-row.playing {
+    border-color: rgba(88,166,255,0.4);
+    background: rgba(88,166,255,0.07);
+  }
+  .channel-logo {
+    width: 44px; height: 30px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #8b949e;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .channel-logo img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+  .channel-info { min-width: 0; }
+  .channel-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .channel-show { font-size: 11px; color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .quality-badge {
+    font-size: 9px; font-weight: 700; padding: 2px 6px;
+    border-radius: 4px; letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  .q-4k { background: rgba(163,113,247,0.12); color: #a371f7; border: 1px solid rgba(163,113,247,0.2); }
+  .q-fhd { background: rgba(88,166,255,0.1); color: #58a6ff; border: 1px solid rgba(88,166,255,0.2); }
+  .q-hd { background: rgba(255,255,255,0.05); color: #8b949e; border: 1px solid rgba(255,255,255,0.08); }
+  .channel-playing-badge {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; color: #58a6ff;
+    flex-shrink: 0;
+  }
+  .channel-playing-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #f85149;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .channel-fav {
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: #484f58;
+    transition: color 0.15s, transform 0.15s;
+    padding: 4px; flex-shrink: 0;
+  }
+  .channel-fav:hover { color: #f7a832; transform: scale(1.2); }
+  .channel-fav.active { color: #f7a832; }
+
+  /* ── Empty/search states ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #484f58;
+  }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state p { font-size: 13px; }
+
+  /* ── Video Player Modal ── */
+  .player-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .player-overlay.open { opacity: 1; pointer-events: all; }
+  .player-modal {
+    background: #131922;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    width: 100%; max-width: 960px;
+    overflow: hidden;
+    transform: scale(0.96);
+    transition: transform 0.2s;
+  }
+  .player-overlay.open .player-modal { transform: scale(1); }
+  .player-video-area {
+    background: #000;
+    aspect-ratio: 16/9;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .player-video-area video { width: 100%; height: 100%; }
+  .player-loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; color: #8b949e;
+  }
+  .player-spinner {
+    width: 36px; height: 36px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .player-info {
+    padding: 16px 20px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .player-channel-logo {
+    width: 52px; height: 36px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #8b949e;
+  }
+  .player-channel-info { flex: 1; }
+  .player-channel-name { font-size: 16px; font-weight: 700; }
+  .player-channel-show { font-size: 12px; color: #8b949e; margin-top: 2px; }
+  .player-close {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+    color: #8b949e; border-radius: 8px; padding: 8px 16px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .player-close:hover { background: rgba(255,255,255,0.1); color: #e6edf3; }
+  .player-fav {
+    background: none; border: none; cursor: pointer;
+    font-size: 20px; color: #484f58;
+    transition: color 0.15s;
+    padding: 4px 8px;
+  }
+  .player-fav.active { color: #f7a832; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- AppBar -->
+<header class="appbar">
+  <div class="appbar-inner">
+    <div class="brand">
+      <span class="brand-icon">📺</span>
+      <span class="brand-name">Mediabox</span>
+    </div>
+    <div class="appbar-search">
+      <span class="search-icon">🔍</span>
+      <input class="search-input" id="searchInput" type="text" placeholder="Search channels..." autocomplete="off">
+      <span class="search-shortcut">/</span>
+    </div>
+    <div class="appbar-right">
+      <div class="quality-filter">
+        <button class="q-btn active" onclick="setQuality('all', this)">All</button>
+        <button class="q-btn" onclick="setQuality('4K', this)">4K</button>
+        <button class="q-btn" onclick="setQuality('FHD', this)">FHD</button>
+        <button class="q-btn" onclick="setQuality('HD', this)">HD</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-section-label">Groups</div>
+
+    <div class="group-item active" onclick="filterGroup('all')">
+      <span class="group-flag">🌐</span>
+      <span class="group-name">All Channels</span>
+      <span class="group-count">188</span>
+    </div>
+
+    <div class="group-item" id="sidebar-favorites" onclick="filterGroup('favorites')">
+      <span class="group-flag">⭐</span>
+      <span class="group-name">Favorites</span>
+      <span class="group-count" id="fav-count">0</span>
+    </div>
+
+    <div class="group-item" id="sidebar-recently" onclick="filterGroup('recent')">
+      <span class="group-flag">🕐</span>
+      <span class="group-name">Recently Watched</span>
+      <span class="group-count">4</span>
+    </div>
+
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section-label">Countries</div>
+
+    <div class="group-item" onclick="filterGroup('Iceland')">
+      <span class="group-flag">🇮🇸</span>
+      <span class="group-name">Iceland</span>
+      <span class="group-count">31</span>
+      <button class="group-fav" onclick="event.stopPropagation(); toggleGroupFav(this)" title="Favorite group">★</button>
+    </div>
+    <div class="group-item" onclick="filterGroup('Iceland Sport')">
+      <span class="group-flag">🇮🇸</span>
+      <span class="group-name">Iceland Sport</span>
+      <span class="group-count">18</span>
+      <button class="group-fav" onclick="event.stopPropagation(); toggleGroupFav(this)" title="Favorite group">★</button>
+    </div>
+    <div class="group-item" onclick="filterGroup('UK Sport')">
+      <span class="group-flag">🇬🇧</span>
+      <span class="group-name">UK Sport</span>
+      <span class="group-count">62</span>
+      <button class="group-fav" onclick="event.stopPropagation(); toggleGroupFav(this)" title="Favorite group">★</button>
+    </div>
+    <div class="group-item" onclick="filterGroup('UK')">
+      <span class="group-flag">🇬🇧</span>
+      <span class="group-name">United Kingdom</span>
+      <span class="group-count">45</span>
+      <button class="group-fav" onclick="event.stopPropagation(); toggleGroupFav(this)" title="Favorite group">★</button>
+    </div>
+    <div class="group-item" onclick="filterGroup('Greece')">
+      <span class="group-flag">🇬🇷</span>
+      <span class="group-name">Greece</span>
+      <span class="group-count">32</span>
+      <button class="group-fav" onclick="event.stopPropagation(); toggleGroupFav(this)" title="Favorite group">★</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- Now Playing Bar (hidden by default) -->
+    <div class="now-playing-bar" id="nowPlayingBar" style="display:none">
+      <div class="now-playing-dot"></div>
+      <div class="now-playing-info">
+        <div class="now-playing-label">Now Playing</div>
+        <div class="now-playing-name" id="nowPlayingName">—</div>
+        <div class="now-playing-show" id="nowPlayingShow">—</div>
+      </div>
+      <button class="now-playing-stop" onclick="stopChannel()">■ Stop</button>
+    </div>
+
+    <!-- Channel groups -->
+    <div id="channelList"></div>
+
+  </main>
+</div>
+
+<!-- Player Modal -->
+<div class="player-overlay" id="playerOverlay" onclick="handleOverlayClick(event)">
+  <div class="player-modal" onclick="event.stopPropagation()">
+    <div class="player-video-area">
+      <div class="player-loading" id="playerLoading">
+        <div class="player-spinner"></div>
+        <span style="font-size:12px">Loading stream…</span>
+      </div>
+      <video id="playerVideo" controls style="display:none"></video>
+    </div>
+    <div class="player-info">
+      <div class="player-channel-logo" id="playerLogo">—</div>
+      <div class="player-channel-info">
+        <div class="player-channel-name" id="playerName">Channel</div>
+        <div class="player-channel-show" id="playerShow">—</div>
+      </div>
+      <button class="player-fav" id="playerFavBtn" onclick="toggleCurrentFav()">★</button>
+      <button class="player-close" onclick="closePlayer()">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Data ──
+const GROUPS = [
+  {
+    id: 'favorites-group',
+    name: 'Favorites',
+    flag: '⭐',
+    showWhenEmpty: false,
+    channels: [] // populated dynamically
+  },
+  {
+    id: 'recently-group',
+    name: 'Recently Watched',
+    flag: '🕐',
+    channels: [
+      { id: 'sky-f1', name: 'UK: Sky Sport F1 HD', show: 'F1: Saudi Arabian GP – Practice 1', quality: 'FHD', logo: 'SKY F1' },
+      { id: 'syn-sport', name: 'IS: Syn Sport 1 HD', show: 'Úrvalsdeildin: KR - Breiðablik', quality: 'HD', logo: 'SYN' },
+      { id: 'eurosport', name: 'UK: Eurosport 1 HD', show: 'Cycling: Paris–Roubaix', quality: 'FHD', logo: 'EURO' },
+      { id: 'tnt', name: 'UK: TNT Sport 1 HD', show: 'UEFA Champions League', quality: 'FHD', logo: 'TNT' },
+    ]
+  },
+  {
+    id: 'iceland-group',
+    name: 'Iceland',
+    flag: '🇮🇸',
+    channels: [
+      { id: 'ruv', name: 'IS: RÚV HD', show: 'Fréttir', quality: 'FHD', logo: 'RÚV' },
+      { id: 'ruv2', name: 'IS: RÚV 2 HD', show: 'Kvikmynd', quality: 'HD', logo: 'RÚV2' },
+      { id: 'stod2', name: 'IS: Stöð 2 HD', show: 'Fréttir Stöðvar 2', quality: 'FHD', logo: 'ST2' },
+      { id: 'stod2bio', name: 'IS: Stöð 2 Bíó HD', show: 'The Revenant (2015)', quality: 'FHD', logo: 'BÍÓ' },
+      { id: 'stod3', name: 'IS: Stöð 3 HD', show: 'Þáttur', quality: 'HD', logo: 'ST3' },
+      { id: 'siminn-1', name: 'IS: Síminn 1 HD', show: 'Dagskrá', quality: 'HD', logo: 'SÍM' },
+    ]
+  },
+  {
+    id: 'iceland-sport-group',
+    name: 'Iceland — Íþróttir',
+    flag: '🇮🇸',
+    channels: [
+      { id: 'syn-sport-1', name: 'IS: Syn Sport 1 HD', show: 'Úrvalsdeildin Live', quality: 'FHD', logo: 'SYN 1' },
+      { id: 'syn-sport-2', name: 'IS: Syn Sport 2 HD', show: 'Tennis: ATP Masters', quality: 'FHD', logo: 'SYN 2' },
+      { id: 'syn-sport-3', name: 'IS: Syn Sport 3 HD', show: 'Basketball: Íslenska', quality: 'HD', logo: 'SYN 3' },
+      { id: 'syn-sport-4', name: 'IS: Syn Sport 4 HD', show: 'Handball: Ísland - Þýskaland', quality: 'HD', logo: 'SYN 4' },
+      { id: 'syn-sport-viaplay', name: 'IS: Syn Sport Viaplay HD', show: 'Premier League: Arsenal – Chelsea', quality: 'FHD', logo: 'VP' },
+      { id: 'eurosport-is-1', name: 'IS: Eurosport 1 HD', show: 'Cycling: Paris–Roubaix', quality: 'FHD', logo: 'EURO' },
+      { id: 'syn-prem', name: 'IS: Syn Premiere League TV HD', show: 'Man City – Liverpool', quality: 'FHD', logo: 'PL' },
+      { id: 'syn-nba', name: 'IS: Syn NBA TV HD', show: 'NBA: Lakers vs Celtics', quality: 'FHD', logo: 'NBA' },
+    ]
+  },
+  {
+    id: 'uk-sport-group',
+    name: 'UK — Sport',
+    flag: '🇬🇧',
+    channels: [
+      { id: 'sky-main', name: 'UK: Sky Sport Main Event UHD', show: 'Liverpool – Tottenham', quality: '4K', logo: 'SKY' },
+      { id: 'sky-main-fhd', name: 'UK: Sky Sport Main Event FHD', show: 'Liverpool – Tottenham', quality: 'FHD', logo: 'SKY' },
+      { id: 'sky-f1-4k', name: 'UK: Sky Sport F1 UHD 4K', show: 'F1: Saudi Arabian GP – Quali', quality: '4K', logo: 'F1' },
+      { id: 'sky-f1-fhd', name: 'UK: Sky Sport F1 FHD', show: 'F1: Saudi Arabian GP – Quali', quality: 'FHD', logo: 'F1' },
+      { id: 'sky-1', name: 'UK: Sky Sport 1 HD', show: 'EFL Championship', quality: 'HD', logo: 'SKY 1' },
+      { id: 'sky-2', name: 'UK: Sky Sport 2 HD', show: 'Cricket: England vs India', quality: 'HD', logo: 'SKY 2' },
+      { id: 'sky-golf', name: 'UK: Sky Sport Golf FHD', show: 'The Masters – Round 2', quality: 'FHD', logo: 'GOLF' },
+      { id: 'tnt-ult', name: 'UK: TNT Sport Ultimate 4K', show: 'UEFA CL: Real Madrid – Man City', quality: '4K', logo: 'TNT' },
+      { id: 'tnt-1', name: 'UK: TNT Sport 1 HD', show: 'UEFA CL: Real Madrid – Man City', quality: 'HD', logo: 'TNT 1' },
+      { id: 'tnt-2', name: 'UK: TNT Sport 2 HD', show: 'UEFA EL: Roma – Sevilla', quality: 'HD', logo: 'TNT 2' },
+      { id: 'euro-4k', name: 'UK: Eurosport 4K UHD', show: 'Cycling: Paris–Roubaix', quality: '4K', logo: 'EURO' },
+      { id: 'euro-1', name: 'UK: Eurosport 1 HD', show: 'Cycling: Paris–Roubaix', quality: 'HD', logo: 'EURO 1' },
+      { id: 'btsport-extra', name: 'UK: Sky Sports+ FHD', show: 'FA Cup: Newcastle – Man Utd', quality: 'FHD', logo: 'SKY+' },
+    ]
+  },
+  {
+    id: 'greece-group',
+    name: 'Greece',
+    flag: '🇬🇷',
+    channels: [
+      { id: 'ert1', name: 'GR: ERT1 HD', show: 'Ειδήσεις', quality: 'FHD', logo: 'ERT1' },
+      { id: 'ert2', name: 'GR: ERT2 HD', show: 'Ταινία', quality: 'HD', logo: 'ERT2' },
+      { id: 'mega', name: 'GR: MEGA HD', show: 'Κεντρικό Δελτίο', quality: 'FHD', logo: 'MEGA' },
+      { id: 'ant1', name: 'GR: ANT1 HD', show: 'Survivor', quality: 'FHD', logo: 'ANT1' },
+      { id: 'skai', name: 'GR: SKAI HD', show: 'Ειδήσεις SKAI', quality: 'FHD', logo: 'SKAI' },
+      { id: 'cosmote-sport1', name: 'GR: Cosmote Sport 1 FHD', show: 'Super League: PAOK – Olympiakos', quality: 'FHD', logo: 'COS 1' },
+      { id: 'cosmote-sport2', name: 'GR: Cosmote Sport 2 HD', show: 'Super League: AEK – Panathinaikos', quality: 'HD', logo: 'COS 2' },
+      { id: 'nova-sports1', name: 'GR: Nova Sports 1 FHD', show: 'NBA Highlights', quality: 'FHD', logo: 'NOVA' },
+    ]
+  }
+];
+
+// ── State ──
+let favorites = new Set(JSON.parse(localStorage.getItem('mediabox-favs') || '[]'));
+let favoriteGroups = new Set(JSON.parse(localStorage.getItem('mediabox-fav-groups') || '[]'));
+let recentlyWatched = JSON.parse(localStorage.getItem('mediabox-recent') || '[]');
+let currentChannel = null;
+let activeQuality = 'all';
+let activeGroup = 'all';
+let searchQuery = '';
+
+// ── Save/load ──
+function saveFavs() { localStorage.setItem('mediabox-favs', JSON.stringify([...favorites])); }
+function saveFavGroups() { localStorage.setItem('mediabox-fav-groups', JSON.stringify([...favoriteGroups])); }
+function saveRecent() { localStorage.setItem('mediabox-recent', JSON.stringify(recentlyWatched)); }
+
+// ── Render ──
+function getFavChannels() {
+  const all = GROUPS.flatMap(g => g.channels);
+  return all.filter(c => favorites.has(c.id));
+}
+
+function getRecentChannels() {
+  const all = GROUPS.flatMap(g => g.channels);
+  return recentlyWatched.map(id => all.find(c => c.id === id)).filter(Boolean).slice(0, 6);
+}
+
+function channelMatchesFilters(ch) {
+  if (activeQuality !== 'all' && ch.quality !== activeQuality) return false;
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    if (!ch.name.toLowerCase().includes(q) && !ch.show.toLowerCase().includes(q)) return false;
+  }
+  return true;
+}
+
+function render() {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '';
+
+  // Build fav group dynamically
+  GROUPS[0].channels = getFavChannels();
+  GROUPS[1].channels = getRecentChannels();
+
+  // Update fav count
+  document.getElementById('fav-count').textContent = favorites.size;
+
+  let groupsToShow = GROUPS;
+
+  if (activeGroup === 'favorites') {
+    groupsToShow = [GROUPS[0]];
+  } else if (activeGroup === 'recent') {
+    groupsToShow = [GROUPS[1]];
+  } else if (activeGroup !== 'all') {
+    groupsToShow = GROUPS.filter(g => g.name.includes(activeGroup) || g.id.includes(activeGroup.toLowerCase().replace(' ', '-')));
+  }
+
+  // Sort: favorited groups first (when showing all)
+  if (activeGroup === 'all') {
+    groupsToShow = [...groupsToShow].sort((a, b) => {
+      const af = favoriteGroups.has(a.id) ? 0 : 1;
+      const bf = favoriteGroups.has(b.id) ? 0 : 1;
+      return af - bf;
+    });
+  }
+
+  let totalVisible = 0;
+
+  groupsToShow.forEach(group => {
+    const filtered = group.channels.filter(channelMatchesFilters);
+    if (filtered.length === 0 && group.showWhenEmpty === false) return;
+
+    totalVisible += filtered.length;
+    const section = document.createElement('div');
+    section.className = 'group-section';
+    const isFavGroup = favoriteGroups.has(group.id);
+
+    section.innerHTML = `
+      <div class="group-header">
+        <span class="group-header-flag">${group.flag}</span>
+        <span class="group-header-name">${group.name}</span>
+        <span class="group-header-count">${filtered.length} channels</span>
+        ${group.id !== 'favorites-group' && group.id !== 'recently-group' ? `
+          <button class="group-header-fav ${isFavGroup ? 'active' : ''}"
+            onclick="toggleGroupFavById('${group.id}')" title="Favorite group">★</button>
+        ` : ''}
+        <button class="group-collapse" onclick="toggleGroupCollapse(this, '${group.id}')">▾</button>
+      </div>
+      <div class="channels" id="channels-${group.id}">
+        ${filtered.length === 0 ? `<div class="empty-state"><div class="icon">📭</div><p>No channels</p></div>` : ''}
+        ${filtered.map(ch => renderChannel(ch)).join('')}
+      </div>
+    `;
+    list.appendChild(section);
+  });
+
+  if (totalVisible === 0 && searchQuery) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><p>No channels found for "<strong>${searchQuery}</strong>"</p></div>`;
+  }
+}
+
+function renderChannel(ch) {
+  const isFav = favorites.has(ch.id);
+  const isPlaying = currentChannel?.id === ch.id;
+  const qualityClass = ch.quality === '4K' ? 'q-4k' : ch.quality === 'FHD' ? 'q-fhd' : 'q-hd';
+  return `
+    <div class="channel-row ${isPlaying ? 'playing' : ''}" onclick="playChannel('${ch.id}')">
+      <div class="channel-logo">${ch.logo}</div>
+      <div class="channel-info">
+        <div class="channel-name">${ch.name}</div>
+        <div class="channel-show">${ch.show}</div>
+      </div>
+      ${isPlaying ? `<div class="channel-playing-badge"><div class="channel-playing-dot"></div>LIVE</div>` : ''}
+      <span class="quality-badge ${qualityClass}">${ch.quality}</span>
+      <button class="channel-fav ${isFav ? 'active' : ''}"
+        onclick="event.stopPropagation(); toggleFav('${ch.id}')"
+        title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">★</button>
+    </div>
+  `;
+}
+
+// ── Interactions ──
+function toggleFav(id) {
+  if (favorites.has(id)) favorites.delete(id);
+  else favorites.add(id);
+  saveFavs();
+  render();
+}
+
+function toggleGroupFav(btn) {
+  btn.classList.toggle('active');
+}
+
+function toggleGroupFavById(groupId) {
+  if (favoriteGroups.has(groupId)) favoriteGroups.delete(groupId);
+  else favoriteGroups.add(groupId);
+  saveFavGroups();
+  render();
+}
+
+function toggleGroupCollapse(btn, groupId) {
+  const channels = document.getElementById('channels-' + groupId);
+  if (channels.style.display === 'none') {
+    channels.style.display = '';
+    btn.textContent = '▾';
+  } else {
+    channels.style.display = 'none';
+    btn.textContent = '▸';
+  }
+}
+
+function filterGroup(group) {
+  activeGroup = group;
+  document.querySelectorAll('.group-item').forEach(el => el.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  render();
+}
+
+function setQuality(q, btn) {
+  activeQuality = q;
+  document.querySelectorAll('.q-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+
+// ── Playback ──
+function getAllChannels() {
+  return GROUPS.flatMap(g => g.channels);
+}
+
+function playChannel(id) {
+  const ch = getAllChannels().find(c => c.id === id);
+  if (!ch) return;
+  currentChannel = ch;
+
+  // Add to recently watched
+  recentlyWatched = [id, ...recentlyWatched.filter(r => r !== id)].slice(0, 8);
+  saveRecent();
+
+  // Open player
+  document.getElementById('playerName').textContent = ch.name;
+  document.getElementById('playerShow').textContent = ch.show;
+  document.getElementById('playerLogo').textContent = ch.logo;
+  document.getElementById('playerFavBtn').className = `player-fav ${favorites.has(id) ? 'active' : ''}`;
+  document.getElementById('playerLoading').style.display = 'flex';
+  document.getElementById('playerVideo').style.display = 'none';
+  document.getElementById('playerOverlay').classList.add('open');
+
+  // Simulate stream loading (in real app: set video.src = stream URL)
+  setTimeout(() => {
+    document.getElementById('playerLoading').style.display = 'none';
+    document.getElementById('playerVideo').style.display = 'block';
+  }, 1500);
+
+  // Update now playing bar
+  document.getElementById('nowPlayingBar').style.display = 'flex';
+  document.getElementById('nowPlayingName').textContent = ch.name;
+  document.getElementById('nowPlayingShow').textContent = ch.show;
+
+  render();
+}
+
+function stopChannel() {
+  currentChannel = null;
+  document.getElementById('nowPlayingBar').style.display = 'none';
+  render();
+}
+
+function closePlayer() {
+  document.getElementById('playerOverlay').classList.remove('open');
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('playerOverlay')) closePlayer();
+}
+
+function toggleCurrentFav() {
+  if (!currentChannel) return;
+  toggleFav(currentChannel.id);
+  document.getElementById('playerFavBtn').className = `player-fav ${favorites.has(currentChannel.id) ? 'active' : ''}`;
+}
+
+// ── Search ──
+document.getElementById('searchInput').addEventListener('input', e => {
+  searchQuery = e.target.value.trim();
+  render();
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && e.target.tagName !== 'INPUT') {
+    e.preventDefault();
+    document.getElementById('searchInput').focus();
+  }
+  if (e.key === 'Escape') {
+    if (document.getElementById('playerOverlay').classList.contains('open')) {
+      closePlayer();
+    } else {
+      document.getElementById('searchInput').blur();
+    }
+  }
+});
+
+// ── Init ──
+render();
+</script>
+</body>
+</html>

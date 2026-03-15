@@ -1,0 +1,272 @@
+import asyncio
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from app.auth import (
+    COOKIE_NAME,
+    TOKEN_EXPIRE_DAYS,
+    create_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
+from app.health import (
+    enrich_channels_with_health,
+    get_health_cache,
+    health_check_loop,
+    run_health_check,
+)
+from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
+from app.models import Favorite, RecentlyWatched, User
+
+DATABASE_URL = "sqlite:////data/mediabox.db"
+engine = create_engine(DATABASE_URL, echo=False)
+
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables
+    SQLModel.metadata.create_all(engine)
+    # Fetch channels from Threadfin
+    await fetch_channels()
+    # Start background health check (first pass + loop)
+    asyncio.create_task(run_health_check())
+    asyncio.create_task(health_check_loop())
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+# Serve static assets
+app.mount("/static", StaticFiles(directory=os.path.join(FRONTEND_DIR, "static")), name="static")
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _check_auth(mb_token: Optional[str]) -> Optional[dict]:
+    """Return user dict if authenticated, else None."""
+    if not mb_token:
+        return None
+    from app.auth import decode_token
+    payload = decode_token(mb_token)
+    if not payload:
+        return None
+    return {"user_id": int(payload["sub"]), "username": payload["username"]}
+
+
+# ── Pages ─────────────────────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    with open(os.path.join(FRONTEND_DIR, "index.html")) as f:
+        return HTMLResponse(f.read())
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root(mb_token: Optional[str] = Cookie(default=None)):
+    user = _check_auth(mb_token)
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    with open(os.path.join(FRONTEND_DIR, "tv.html")) as f:
+        return HTMLResponse(f.read())
+
+
+# ── Auth API ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/login")
+async def api_login(
+    response: Response,
+    username: str = Form(...),
+    password: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    user = session.exec(select(User).where(User.username == username)).first()
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_token(user.id, user.username)
+    redirect = RedirectResponse("/", status_code=302)
+    redirect.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=TOKEN_EXPIRE_DAYS * 86400,
+        httponly=True,
+        samesite="lax",
+    )
+    return redirect
+
+
+@app.post("/api/auth/logout")
+async def api_logout():
+    redirect = RedirectResponse("/login", status_code=302)
+    redirect.delete_cookie(COOKIE_NAME)
+    return redirect
+
+
+# ── User API ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/me")
+async def api_me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+
+# ── Channels API ──────────────────────────────────────────────────────────────
+
+@app.get("/api/channels")
+async def api_channels(current_user: dict = Depends(get_current_user)):
+    groups = get_cached_groups()
+    # Enrich each group's channels with health data
+    enriched_groups = []
+    for group in groups:
+        g_copy = dict(group)
+        g_copy["channels"] = enrich_channels_with_health(group["channels"])
+        enriched_groups.append(g_copy)
+    return {"groups": enriched_groups}
+
+
+@app.get("/api/health")
+async def api_health(current_user: dict = Depends(get_current_user)):
+    return get_health_cache()
+
+
+@app.get("/api/stream/{channel_id}")
+async def api_stream(channel_id: str, current_user: dict = Depends(get_current_user)):
+    ch = get_channel_by_id(channel_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    streams = ch.get("streams", [])
+    if not streams:
+        raise HTTPException(status_code=404, detail="No streams available")
+
+    health_cache = get_health_cache()
+
+    # Pick the best stream: first green, then yellow, then any
+    best_url = None
+    for stream in streams:
+        url = stream.get("url", "")
+        entry = health_cache.get(url, {})
+        h = entry.get("health", "unknown")
+        if h == "green":
+            best_url = url
+            break
+
+    if not best_url:
+        for stream in streams:
+            url = stream.get("url", "")
+            entry = health_cache.get(url, {})
+            h = entry.get("health", "unknown")
+            if h == "yellow":
+                best_url = url
+                break
+
+    if not best_url:
+        best_url = streams[0]["url"]
+
+    return {"url": best_url, "channel_id": channel_id}
+
+
+# ── Favorites API ─────────────────────────────────────────────────────────────
+
+@app.get("/api/favorites")
+async def api_get_favorites(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user_id = current_user["user_id"]
+    favs = session.exec(select(Favorite).where(Favorite.user_id == user_id)).all()
+    return [f.channel_id for f in favs]
+
+
+@app.post("/api/favorites/{channel_id}")
+async def api_toggle_favorite(
+    channel_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user_id = current_user["user_id"]
+    existing = session.exec(
+        select(Favorite).where(
+            Favorite.user_id == user_id,
+            Favorite.channel_id == channel_id,
+        )
+    ).first()
+
+    if existing:
+        session.delete(existing)
+        session.commit()
+        return {"action": "removed", "channel_id": channel_id}
+    else:
+        fav = Favorite(user_id=user_id, channel_id=channel_id)
+        session.add(fav)
+        session.commit()
+        return {"action": "added", "channel_id": channel_id}
+
+
+# ── Recently Watched API ──────────────────────────────────────────────────────
+
+@app.get("/api/recent")
+async def api_get_recent(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user_id = current_user["user_id"]
+    recents = session.exec(
+        select(RecentlyWatched)
+        .where(RecentlyWatched.user_id == user_id)
+        .order_by(RecentlyWatched.watched_at.desc())
+        .limit(10)
+    ).all()
+    return [r.channel_id for r in recents]
+
+
+@app.post("/api/recent/{channel_id}")
+async def api_add_recent(
+    channel_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user_id = current_user["user_id"]
+
+    # Remove existing entry for this channel if any
+    existing = session.exec(
+        select(RecentlyWatched).where(
+            RecentlyWatched.user_id == user_id,
+            RecentlyWatched.channel_id == channel_id,
+        )
+    ).first()
+    if existing:
+        session.delete(existing)
+        session.commit()
+
+    # Add new entry
+    entry = RecentlyWatched(user_id=user_id, channel_id=channel_id, watched_at=datetime.utcnow())
+    session.add(entry)
+    session.commit()
+
+    # Keep only last 10 per user
+    all_recent = session.exec(
+        select(RecentlyWatched)
+        .where(RecentlyWatched.user_id == user_id)
+        .order_by(RecentlyWatched.watched_at.desc())
+    ).all()
+    if len(all_recent) > 10:
+        for old in all_recent[10:]:
+            session.delete(old)
+        session.commit()
+
+    return {"action": "added", "channel_id": channel_id}

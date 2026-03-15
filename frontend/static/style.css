@@ -1,0 +1,92 @@
+/* ── CSS Variables ── */
+:root {
+  --bg:      #0a0e14;
+  --surface: #131922;
+  --border:  rgba(255,255,255,0.06);
+  --text:    #e6edf3;
+  --muted:   #8b949e;
+  --faint:   #484f58;
+  --accent:  #58a6ff;
+  --purple:  #a371f7;
+  --green:   #3fb950;
+  --yellow:  #d29922;
+  --red:     #f85149;
+}
+
+/* ── Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button { font-family: inherit; cursor: pointer; }
+
+input, button, select, textarea {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+/* ── Utility classes ── */
+.hidden { display: none !important; }
+.flex { display: flex; }
+.flex-1 { flex: 1; }
+.items-center { align-items: center; }
+.gap-8 { gap: 8px; }
+.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Health dot ── */
+.h-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.h-dot.green  { background: var(--green);  box-shadow: 0 0 5px rgba(63,185,80,0.5); }
+.h-dot.yellow { background: var(--yellow); box-shadow: 0 0 5px rgba(210,153,34,0.5); }
+.h-dot.red    { background: var(--red);    box-shadow: 0 0 5px rgba(248,81,73,0.5); }
+.h-dot.unknown { background: var(--faint); }
+
+/* ── Health tag ── */
+.health-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.health-tag.green  { color: var(--green);  background: rgba(63,185,80,0.1); }
+.health-tag.yellow { color: var(--yellow); background: rgba(210,153,34,0.1); }
+.health-tag.red    { color: var(--red);    background: rgba(248,81,73,0.1); }
+.health-tag.unknown { color: var(--faint); background: rgba(255,255,255,0.04); }
+
+/* ── Animations ── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
