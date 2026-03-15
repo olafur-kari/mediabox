@@ -1437,12 +1437,18 @@ const COUNTRY_ALIASES = {
   'australia': 'ástralía', 'au': 'ástralía',
 };
 
-function scoreChannel(ch, q) {
+// Normalize: lowercase + strip diacritics so "rúv" matches "RÚV", "ruv" matches "RÚV" etc.
+function norm(str) {
+  return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function scoreChannel(ch, rawQ) {
+  const q = norm(rawQ);
   // Strip country prefix (e.g. "NO: NRK 1 HD" → "nrk 1 hd") for matching
-  const stripped = ch.name.toLowerCase().replace(/^[a-z]{2}\s*:\s*/, '');
-  const full = ch.name.toLowerCase();
-  const show = (ch.show || '').toLowerCase();
-  const group = (ch.groupName || '').toLowerCase();
+  const stripped = norm(ch.name).replace(/^[a-z]{2}\s*:\s*/, '');
+  const full = norm(ch.name);
+  const show = norm(ch.show || '');
+  const group = norm(ch.groupName || '');
 
   if (stripped === q || full === q) return 100;
   if (stripped.startsWith(q)) return 80;
@@ -1456,19 +1462,18 @@ function scoreChannel(ch, q) {
   const words = stripped.split(/\s+/);
   if (words.some(w => w.startsWith(q))) return 55;
 
-  // Country alias match: "greece" → all channels in Grikkland group
+  // Country alias match: "greece" / "grikkland" → all channels in that group
   const mappedGroup = COUNTRY_ALIASES[q];
-  if (mappedGroup && group === mappedGroup) return 40;
-  // Also handle partial alias match: "norw" → Noregur
+  if (mappedGroup && group === norm(mappedGroup)) return 40;
   for (const [alias, mapped] of Object.entries(COUNTRY_ALIASES)) {
-    if (alias.startsWith(q) && group === mapped) return 35;
+    if (alias.startsWith(q) && group === norm(mapped)) return 35;
   }
 
   return 0;
 }
 
 function renderDropdown() {
-  const q = searchInput.value.trim().toLowerCase();
+  const q = norm(searchInput.value.trim());
   if (!q) { searchDropdown.classList.remove('open'); return; }
   searchFocusIdx = -1;
 

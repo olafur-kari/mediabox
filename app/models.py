@@ -35,5 +35,6 @@ class CustomChannel(SQLModel, table=True):
 class ProviderChannel(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
+    name_normalized: str = Field(index=True)  # accent-stripped lowercase for search
     group: str
     url: str

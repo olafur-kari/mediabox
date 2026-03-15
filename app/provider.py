@@ -2,6 +2,7 @@
 import asyncio
 import os
 import re
+import unicodedata
 
 import httpx
 from sqlmodel import Session, delete, select
@@ -18,6 +19,11 @@ _VOD_PATTERNS = re.compile(
     r"(series|movies?|movie|film|vod|24-7|24/7|kids|boxing|ufc|wwe|wrestling|ppv)",
     re.IGNORECASE,
 )
+
+
+def _normalize(s: str) -> str:
+    """Lowercase + strip diacritics for accent-insensitive search."""
+    return unicodedata.normalize('NFD', s.lower()).encode('ascii', 'ignore').decode()
 
 
 def _is_tv_group(group: str) -> bool:
@@ -42,7 +48,7 @@ def _parse_m3u(text: str):
             if i < len(lines):
                 url = lines[i].strip()
                 if name and url and not url.startswith("#") and _is_tv_group(group):
-                    yield name, group, url
+                    yield name, _normalize(name), group, url
         i += 1
 
 
@@ -65,8 +71,8 @@ async def fetch_provider_channels(engine) -> int:
     with Session(engine) as session:
         session.exec(delete(ProviderChannel))
         session.commit()
-        for name, group, url in rows:
-            session.add(ProviderChannel(name=name, group=group, url=url))
+        for name, name_normalized, group, url in rows:
+            session.add(ProviderChannel(name=name, name_normalized=name_normalized, group=group, url=url))
         session.commit()
 
     print(f"[provider] Stored {len(rows)} provider channels.")
@@ -81,12 +87,12 @@ async def provider_refresh_loop(engine):
 
 
 def search_provider_channels(engine, query: str, limit: int = 15):
-    """Search provider channels by name (case-insensitive substring)."""
-    q = f"%{query}%"
+    """Search provider channels by normalized name (accent-insensitive)."""
+    q = f"%{_normalize(query)}%"
     with Session(engine) as session:
         results = session.exec(
             select(ProviderChannel)
-            .where(ProviderChannel.name.ilike(q))
+            .where(ProviderChannel.name_normalized.ilike(q))
             .limit(limit)
         ).all()
     return [{"id": r.id, "name": r.name, "group": r.group, "url": r.url} for r in results]
