@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
 
+import httpx
+
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -143,41 +145,68 @@ async def api_health(current_user: dict = Depends(get_current_user)):
     return get_health_cache()
 
 
+def _pick_best_url(streams: list) -> str:
+    health_cache = get_health_cache()
+    for priority in ("green", "yellow"):
+        for stream in streams:
+            url = stream.get("url", "")
+            if health_cache.get(url, {}).get("health") == priority:
+                return url
+    return streams[0]["url"]
+
+
+def _resolve_threadfin_url(url: str) -> str:
+    """Replace localhost with the Threadfin host so the server can reach it."""
+    threadfin_url = os.environ.get("THREADFIN_URL", "http://100.104.189.115:34400")
+    return url.replace("http://localhost:34400", threadfin_url)
+
+
 @app.get("/api/stream/{channel_id}")
-async def api_stream(channel_id: str, current_user: dict = Depends(get_current_user)):
+async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = Depends(get_current_user)):
+    ch = get_channel_by_id(channel_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    streams = ch.get("streams", [])
+    if not streams:
+        raise HTTPException(status_code=404, detail="No streams available")
+    if stream_idx >= len(streams):
+        stream_idx = 0
+    url = _resolve_threadfin_url(streams[stream_idx]["url"])
+    return {"url": f"/proxy/stream/{channel_id}?stream_idx={stream_idx}", "channel_id": channel_id}
+
+
+@app.get("/proxy/stream/{channel_id}")
+async def proxy_stream(channel_id: str, stream_idx: int = 0, mb_token: Optional[str] = Cookie(default=None)):
+    user = _check_auth(mb_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     ch = get_channel_by_id(channel_id)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
 
     streams = ch.get("streams", [])
-    if not streams:
-        raise HTTPException(status_code=404, detail="No streams available")
+    if not streams or stream_idx >= len(streams):
+        raise HTTPException(status_code=404, detail="Stream not found")
 
-    health_cache = get_health_cache()
+    url = _resolve_threadfin_url(streams[stream_idx]["url"])
 
-    # Pick the best stream: first green, then yellow, then any
-    best_url = None
-    for stream in streams:
-        url = stream.get("url", "")
-        entry = health_cache.get(url, {})
-        h = entry.get("health", "unknown")
-        if h == "green":
-            best_url = url
-            break
+    async def stream_generator():
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            async with client.stream("GET", url) as resp:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    yield chunk
 
-    if not best_url:
-        for stream in streams:
-            url = stream.get("url", "")
-            entry = health_cache.get(url, {})
-            h = entry.get("health", "unknown")
-            if h == "yellow":
-                best_url = url
-                break
+    # Detect content type from URL
+    content_type = "video/MP2T"
+    if ".m3u8" in url:
+        content_type = "application/vnd.apple.mpegurl"
 
-    if not best_url:
-        best_url = streams[0]["url"]
-
-    return {"url": best_url, "channel_id": channel_id}
+    return StreamingResponse(
+        stream_generator(),
+        media_type=content_type,
+        headers={"Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*"},
+    )
 
 
 # ── Favorites API ─────────────────────────────────────────────────────────────

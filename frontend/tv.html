@@ -753,7 +753,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
 let groups = [];           // [{id, name, flag, channels:[...]}]
@@ -1126,7 +1126,7 @@ async function loadStream(channelId, streamIdx) {
 function startHls(url, ch, streamIdx) {
   const vid = document.getElementById('vid');
 
-  // Destroy existing HLS instance
+  // Destroy existing player instance
   if (hlsInstance) {
     hlsInstance.destroy();
     hlsInstance = null;
@@ -1138,66 +1138,43 @@ function startHls(url, ch, streamIdx) {
   showSpinner();
   hideError();
 
-  if (Hls.isSupported()) {
-    hlsInstance = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      xhrSetup: (xhr) => { xhr.withCredentials = true; },
-    });
+  const isM3u8 = url.includes('.m3u8');
+  const streams = ch.streams || [];
+  const hasBackup = streams.length > streamIdx + 1;
 
-    hlsInstance.on(Hls.Events.MEDIA_ATTACHED, () => {
-      hlsInstance.loadSource(url);
-    });
-
-    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+  if (isM3u8 && mpegts.isSupported()) {
+    // HLS via mpegts.js
+    hlsInstance = mpegts.createPlayer({ type: 'mse', url, isLive: true }, { enableWorker: true });
+    hlsInstance.attachMediaElement(vid);
+    hlsInstance.load();
+    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail) => {
       hideSpinner();
-      vid.style.display = 'block';
-      vid.play().catch(() => {});
+      showError('Stream unavailable — network error', hasBackup);
     });
-
-    hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-      if (data.fatal) {
-        hideSpinner();
-        const streams = ch.streams || [];
-        const hasBackup = streams.length > streamIdx + 1;
-        showError(
-          data.type === Hls.ErrorTypes.NETWORK_ERROR
-            ? 'Stream unavailable — network error'
-            : 'Stream error',
-          hasBackup
-        );
-      }
+    vid.style.display = 'block';
+    vid.play().then(() => hideSpinner()).catch(() => { hideSpinner(); showError('Playback failed', hasBackup); });
+  } else if (mpegts.isSupported()) {
+    // MPEG-TS via mpegts.js
+    hlsInstance = mpegts.createPlayer({ type: 'mpegts', url, isLive: true }, { enableWorker: true });
+    hlsInstance.attachMediaElement(vid);
+    hlsInstance.load();
+    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail) => {
+      hideSpinner();
+      showError('Stream unavailable — network error', hasBackup);
     });
-
-    hlsInstance.attachMedia(vid);
-
-  } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
-    // Native HLS (Safari)
+    vid.style.display = 'block';
+    vid.play().then(() => hideSpinner()).catch(() => { hideSpinner(); showError('Playback failed', hasBackup); });
+  } else {
+    // Fallback: native
     vid.src = url;
     vid.style.display = 'block';
     vid.play()
       .then(() => hideSpinner())
-      .catch(() => {
-        hideSpinner();
-        showError('Playback failed');
-      });
-
+      .catch(() => { hideSpinner(); showError('Playback failed — format not supported', hasBackup); });
     vid.addEventListener('error', () => {
       hideSpinner();
-      const streams = ch.streams || [];
-      showError('Stream unavailable', streams.length > streamIdx + 1);
+      showError('Stream unavailable', hasBackup);
     }, { once: true });
-
-  } else {
-    // Fallback: just set src
-    vid.src = url;
-    vid.style.display = 'block';
-    vid.play()
-      .then(() => hideSpinner())
-      .catch(() => {
-        hideSpinner();
-        showError('Playback failed — format not supported');
-      });
   }
 }
 
