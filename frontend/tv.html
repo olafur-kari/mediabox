@@ -1333,14 +1333,39 @@ function moveFocus(d, items) {
   items.forEach((el, i) => el.classList.toggle('focused', i === searchFocusIdx));
 }
 
+function scoreChannel(ch, q) {
+  // Strip country prefix (e.g. "NO: NRK 1 HD" → "nrk 1 hd") for matching
+  const stripped = ch.name.toLowerCase().replace(/^[a-z]{2}\s*:\s*/, '');
+  const full = ch.name.toLowerCase();
+  const show = (ch.show || '').toLowerCase();
+  const group = (ch.groupName || '').toLowerCase();
+
+  if (stripped === q || full === q) return 100;
+  if (stripped.startsWith(q)) return 80;
+  if (full.startsWith(q)) return 70;
+  if (stripped.includes(q)) return 60;
+  if (full.includes(q)) return 50;
+  if (show.includes(q)) return 30;
+  if (group.includes(q)) return 10;
+
+  // Word-boundary match: any word in the name starts with query
+  const words = stripped.split(/\s+/);
+  if (words.some(w => w.startsWith(q))) return 55;
+
+  return 0;
+}
+
 function renderDropdown() {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { searchDropdown.classList.remove('open'); return; }
   searchFocusIdx = -1;
 
   const results = allChannels
-    .filter(ch => ch.name.toLowerCase().includes(q) || (ch.show || '').toLowerCase().includes(q))
-    .slice(0, 10);
+    .map(ch => ({ ch, score: scoreChannel(ch, q) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12)
+    .map(x => x.ch);
 
   if (!results.length) {
     searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>`;
@@ -1353,7 +1378,7 @@ function renderDropdown() {
           <div class="search-item" onclick="selectSearch('${escHtml(ch.id)}')">
             <div class="search-item-logo">${escHtml(ch.logo || '')}</div>
             <div class="search-item-info">
-              <div class="search-item-name">${hl(ch.name, q)}</div>
+              <div class="search-item-name">${hl(ch.name.replace(/^[A-Z]{2}\s*:\s*/, ''), q)}</div>
               <div class="search-item-meta">${escHtml(ch.show || ch.groupName || '')}</div>
             </div>
             <div class="search-item-right">
