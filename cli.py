@@ -43,6 +43,26 @@ def cmd_add_user(username: str, password: str, admin: bool):
         session.close()
 
 
+@cli.command("change-password")
+@click.argument("username")
+@click.argument("new_password")
+def cmd_change_password(username: str, new_password: str):
+    """Change a user's password."""
+    from app.auth import hash_password
+    session = get_session()
+    try:
+        user = session.exec(select(User).where(User.username == username)).first()
+        if not user:
+            click.echo(f"Error: user '{username}' not found", err=True)
+            sys.exit(1)
+        user.hashed_password = hash_password(new_password)
+        session.add(user)
+        session.commit()
+        click.echo(f"Password updated for: {username}")
+    finally:
+        session.close()
+
+
 @cli.command("list-users")
 def cmd_list_users():
     """List all users."""
