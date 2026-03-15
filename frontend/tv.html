@@ -406,6 +406,30 @@
       gap: 6px;
       flex-shrink: 0;
     }
+    .health-badge {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .health-badge::before {
+      content: '';
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .health-badge.green  { background: rgba(63,185,80,0.1);  color: #3fb950; border: 1px solid rgba(63,185,80,0.25); }
+    .health-badge.green::before  { background: #3fb950; }
+    .health-badge.yellow { background: rgba(210,153,34,0.12); color: #d2991f; border: 1px solid rgba(210,153,34,0.25); }
+    .health-badge.yellow::before { background: #d2991f; }
+    .health-badge.red    { background: rgba(248,81,73,0.1);  color: #f85149; border: 1px solid rgba(248,81,73,0.25); }
+    .health-badge.red::before    { background: #f85149; }
+    .health-badge.unknown { background: rgba(139,148,158,0.1); color: var(--muted); border: 1px solid rgba(139,148,158,0.2); }
+    .health-badge.unknown::before { background: var(--muted); }
     .backup-badge {
       font-size: 9px;
       font-weight: 600;
@@ -874,6 +898,11 @@ function healthDot(h) {
   return `<span class="h-dot ${h || 'unknown'}" title="${h || 'unknown'}"></span>`;
 }
 
+function healthBadge(h) {
+  const labels = { green: 'Live', yellow: 'Slow', red: 'Down', unknown: '?' };
+  return `<span class="health-badge ${h || 'unknown'}">${labels[h] || '?'}</span>`;
+}
+
 function healthTag(h, ms) {
   const labels = { green: 'Healthy', yellow: 'Slow', red: 'Down', unknown: 'Unknown' };
   const msStr = ms != null ? `${ms}ms` : '—';
@@ -1037,8 +1066,8 @@ function renderChannelRow(ch) {
       </div>
       <div class="ch-badges">
         ${isPlaying ? `<div class="ch-live"><div class="ch-live-dot"></div>LIVE</div>` : ''}
-        ${healthDot(primaryHealth)}
-        ${hasBackups ? `<span class="backup-badge">+${ch.streams.length - 1} backup</span>` : ''}
+        ${healthBadge(primaryHealth)}
+        ${hasBackups ? `<span class="backup-badge">+${ch.streams.length - 1}</span>` : ''}
       </div>
       <button class="ch-fav ${isFav ? 'on' : ''}"
         onclick="event.stopPropagation(); toggleFav('${escHtml(ch.id)}')"
