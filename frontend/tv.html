@@ -1142,35 +1142,33 @@ function startHls(url, ch, streamIdx) {
   const streams = ch.streams || [];
   const hasBackup = streams.length > streamIdx + 1;
 
-  if (isM3u8 && mpegts.isSupported()) {
-    // HLS via mpegts.js
-    hlsInstance = mpegts.createPlayer({ type: 'mse', url, isLive: true }, { enableWorker: true });
+  const type = url.includes('.m3u8') ? 'mse' : 'mpegts';
+
+  if (mpegts.isSupported()) {
+    hlsInstance = mpegts.createPlayer(
+      { type, url, isLive: true },
+      { enableWorker: false, lazyLoadMaxDuration: 3 * 60, seekType: 'range' }
+    );
+    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail, errInfo) => {
+      hideSpinner();
+      console.error('mpegts error', errType, errDetail, errInfo);
+      showError(`Stream error: ${errType}/${errDetail}`, hasBackup);
+    });
     hlsInstance.attachMediaElement(vid);
     hlsInstance.load();
-    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail) => {
-      hideSpinner();
-      showError('Stream unavailable — network error', hasBackup);
-    });
     vid.style.display = 'block';
-    vid.play().then(() => hideSpinner()).catch(() => { hideSpinner(); showError('Playback failed', hasBackup); });
-  } else if (mpegts.isSupported()) {
-    // MPEG-TS via mpegts.js
-    hlsInstance = mpegts.createPlayer({ type: 'mpegts', url, isLive: true }, { enableWorker: true });
-    hlsInstance.attachMediaElement(vid);
-    hlsInstance.load();
-    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail) => {
+    vid.addEventListener('canplay', () => {
       hideSpinner();
-      showError('Stream unavailable — network error', hasBackup);
-    });
-    vid.style.display = 'block';
-    vid.play().then(() => hideSpinner()).catch(() => { hideSpinner(); showError('Playback failed', hasBackup); });
+      vid.play().catch(() => {});
+    }, { once: true });
   } else {
-    // Fallback: native
+    // Fallback: native (Safari HLS)
     vid.src = url;
     vid.style.display = 'block';
-    vid.play()
-      .then(() => hideSpinner())
-      .catch(() => { hideSpinner(); showError('Playback failed — format not supported', hasBackup); });
+    vid.addEventListener('canplay', () => {
+      hideSpinner();
+      vid.play().catch(() => {});
+    }, { once: true });
     vid.addEventListener('error', () => {
       hideSpinner();
       showError('Stream unavailable', hasBackup);
