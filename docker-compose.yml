@@ -1,0 +1,16 @@
+services:
+  plex:
+    image: plexinc/pms-docker:latest
+    container_name: plex
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PLEX_CLAIM=${PLEX_CLAIM}
+      - PLEX_UID=1000
+      - PLEX_GID=1000
+      - TZ=Atlantic/Reykjavik
+    volumes:
+      - ./config/plex:/config
+      - /home/oli/media/tv:/data/tv
+      - /home/oli/media/movies:/data/movies
+      - /tmp/plex-transcode:/transcode
