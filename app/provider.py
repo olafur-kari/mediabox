@@ -47,7 +47,7 @@ def _parse_m3u(text: str):
                 i += 1
             if i < len(lines):
                 url = lines[i].strip()
-                if name and url and not url.startswith("#") and _is_tv_group(group):
+                if name and url and not url.startswith("#") and _is_tv_group(group) and not re.search(r'\b(4K|UHD)\b', name, re.IGNORECASE):
                     yield name, _normalize(name), group, url
         i += 1
 
