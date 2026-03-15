@@ -22,12 +22,6 @@ from app.auth import (
     hash_password,
     verify_password,
 )
-from app.health import (
-    enrich_channels_with_health,
-    get_health_cache,
-    health_check_loop,
-    run_health_check,
-)
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
 from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User
 from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
@@ -49,9 +43,6 @@ async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     # Fetch channels from Threadfin
     await fetch_channels()
-    # Start background health check (first pass + loop)
-    asyncio.create_task(run_health_check())
-    asyncio.create_task(health_check_loop())
     # Fetch full provider channel list in background (non-blocking)
     asyncio.create_task(fetch_provider_channels(engine))
     asyncio.create_task(provider_refresh_loop(engine))
@@ -137,28 +128,10 @@ async def api_me(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/channels")
 async def api_channels(current_user: dict = Depends(get_current_user)):
-    groups = get_cached_groups()
-    # Enrich each group's channels with health data
-    enriched_groups = []
-    for group in groups:
-        g_copy = dict(group)
-        g_copy["channels"] = enrich_channels_with_health(group["channels"])
-        enriched_groups.append(g_copy)
-    return {"groups": enriched_groups}
-
-
-@app.get("/api/health")
-async def api_health(current_user: dict = Depends(get_current_user)):
-    return get_health_cache()
+    return {"groups": get_cached_groups()}
 
 
 def _pick_best_url(streams: list) -> str:
-    health_cache = get_health_cache()
-    for priority in ("green", "yellow"):
-        for stream in streams:
-            url = stream.get("url", "")
-            if health_cache.get(url, {}).get("health") == priority:
-                return url
     return streams[0]["url"]
 
 

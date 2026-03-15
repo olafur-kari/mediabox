@@ -474,30 +474,6 @@
       gap: 6px;
       flex-shrink: 0;
     }
-    .health-badge {
-      font-size: 9px;
-      font-weight: 600;
-      padding: 2px 7px;
-      border-radius: 4px;
-      white-space: nowrap;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .health-badge::before {
-      content: '';
-      width: 5px; height: 5px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .health-badge.green  { background: rgba(63,185,80,0.1);  color: #3fb950; border: 1px solid rgba(63,185,80,0.25); }
-    .health-badge.green::before  { background: #3fb950; }
-    .health-badge.yellow { background: rgba(210,153,34,0.12); color: #d2991f; border: 1px solid rgba(210,153,34,0.25); }
-    .health-badge.yellow::before { background: #d2991f; }
-    .health-badge.red    { background: rgba(248,81,73,0.1);  color: #f85149; border: 1px solid rgba(248,81,73,0.25); }
-    .health-badge.red::before    { background: #f85149; }
-    .health-badge.unknown { background: rgba(139,148,158,0.1); color: var(--muted); border: 1px solid rgba(139,148,158,0.2); }
-    .health-badge.unknown::before { background: var(--muted); }
     .backup-badge {
       font-size: 9px;
       font-weight: 600;
@@ -894,7 +870,6 @@
 let groups = [];           // [{id, name, flag, channels:[...]}]
 let allChannels = [];      // flat list
 let customChannels = [];   // [{id, name, url}]
-let healthCache = {};      // {url: {health, ms, ...}}
 let favorites = new Set(); // channel_ids
 let recentIds = [];        // channel_ids ordered newest first
 let pinnedGroups = new Set(JSON.parse(localStorage.getItem('mb-pinned-groups') || '[]'));
@@ -908,10 +883,9 @@ let hlsInstance = null;
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const [meResp, chResp, hlthResp, favResp, recentResp, customResp] = await Promise.all([
+    const [meResp, chResp, favResp, recentResp, customResp] = await Promise.all([
       fetch('/api/me'),
       fetch('/api/channels'),
-      fetch('/api/health'),
       fetch('/api/favorites'),
       fetch('/api/recent'),
       fetch('/api/custom-channels'),
@@ -929,9 +903,6 @@ async function init() {
     mergeCustomChannels();
     allChannels = groups.flatMap(g => g.channels.map(ch => ({...ch, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
 
-    healthCache = await hlthResp.json();
-    applyHealthToChannels();
-
     favorites = new Set(await favResp.json());
     recentIds = await recentResp.json();
 
@@ -944,8 +915,6 @@ async function init() {
     });
     renderChannels();
 
-    // Poll health every 2 minutes
-    setInterval(refreshHealth, 120000);
   } catch (err) {
     console.error('Init error:', err);
     document.getElementById('channelList').innerHTML = `
@@ -957,66 +926,13 @@ async function init() {
   }
 }
 
-async function refreshHealth() {
-  try {
-    const resp = await fetch('/api/health');
-    if (resp.ok) {
-      healthCache = await resp.json();
-      applyHealthToChannels();
-      renderChannels();
-      if (currentChannelId) {
-        const ch = findChannel(currentChannelId);
-        if (ch) renderStreamPicker(ch);
-      }
-    }
-  } catch (_) {}
-}
-
-function applyHealthToChannels() {
-  for (const ch of allChannels) {
-    for (const stream of ch.streams || []) {
-      const entry = healthCache[stream.url] || {};
-      stream.health = entry.health || 'unknown';
-      stream.ms = entry.ms || null;
-    }
-  }
-  // Also update in groups
-  for (const g of groups) {
-    for (const ch of g.channels) {
-      for (const stream of ch.streams || []) {
-        const entry = healthCache[stream.url] || {};
-        stream.health = entry.health || 'unknown';
-        stream.ms = entry.ms || null;
-      }
-    }
-  }
-}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function findChannel(id) {
   return allChannels.find(c => c.id === id);
 }
 
-function healthDot(h) {
-  return `<span class="h-dot ${h || 'unknown'}" title="${h || 'unknown'}"></span>`;
-}
-
-function healthBadge(h) {
-  const labels = { green: 'Live', yellow: 'Slow', red: 'Down', unknown: '?' };
-  return `<span class="health-badge ${h || 'unknown'}">${labels[h] || '?'}</span>`;
-}
-
-function healthTag(h, ms) {
-  const labels = { green: 'Healthy', yellow: 'Slow', red: 'Down', unknown: 'Unknown' };
-  const msStr = ms != null ? `${ms}ms` : '—';
-  return `<span class="health-tag ${h || 'unknown'}">${healthDot(h)} ${labels[h] || 'Unknown'}</span><span class="stream-ms">${msStr}</span>`;
-}
-
 function bestStreamIdx(streams) {
-  const greenIdx = streams.findIndex(s => s.health === 'green');
-  if (greenIdx >= 0) return greenIdx;
-  const yellowIdx = streams.findIndex(s => s.health === 'yellow');
-  if (yellowIdx >= 0) return yellowIdx;
   return 0;
 }
 
@@ -1154,8 +1070,6 @@ function renderChannels() {
 }
 
 function renderChannelRow(ch) {
-  const primaryStream = (ch.streams || [])[0] || {};
-  const primaryHealth = primaryStream.health || 'unknown';
   const hasBackups = (ch.streams || []).length > 1;
   const isFav = favorites.has(ch.id);
   const isPlaying = currentChannelId === ch.id;
@@ -1169,7 +1083,6 @@ function renderChannelRow(ch) {
       </div>
       <div class="ch-badges">
         ${isPlaying ? `<div class="ch-live"><div class="ch-live-dot"></div>LIVE</div>` : ''}
-        ${healthBadge(primaryHealth)}
         ${hasBackups ? `<span class="backup-badge">+${ch.streams.length - 1}</span>` : ''}
       </div>
       <button class="ch-fav ${isFav ? 'on' : ''}"
@@ -1381,22 +1294,15 @@ function renderStreamPicker(ch) {
   const streams = ch.streams || [];
 
   if (streams.length <= 1) {
-    const s = streams[0] || {};
-    picker.innerHTML = `
-      <span class="stream-picker-label">Stream</span>
-      ${healthTag(s.health, s.ms)}
-    `;
+    picker.innerHTML = `<span class="stream-picker-label">Stream</span>`;
   } else {
-    const activeSt = streams[activeStreamIdx] || {};
     picker.innerHTML = `
       <span class="stream-picker-label">Streams</span>
       ${streams.map((s, i) => `
         <button class="stream-btn ${i === activeStreamIdx ? 'active' : ''}" onclick="switchStream(${i})">
-          ${healthDot(s.health)} ${escHtml(s.label)}
+          ${escHtml(s.label)}
         </button>
       `).join('')}
-      <span class="stream-spacer"></span>
-      ${healthTag(activeSt.health, activeSt.ms)}
     `;
   }
 }
@@ -1549,7 +1455,6 @@ function renderDropdown() {
               <div class="search-item-meta">${escHtml(ch.show || ch.groupName || '')}</div>
             </div>
             <div class="search-item-right">
-              ${healthDot(best.health)}
               <span class="search-item-group">${ch.groupFlag || ''} ${escHtml(ch.groupName || '')}</span>
               <button class="search-fav-btn ${favorites.has(ch.id) ? 'on' : ''}"
                 onclick="event.stopPropagation(); toggleFavSearch('${escHtml(ch.id)}', this)"
