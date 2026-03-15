@@ -1151,8 +1151,7 @@ function startHls(url, ch, streamIdx) {
     );
     hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail, errInfo) => {
       hideSpinner();
-      console.error('mpegts error', errType, errDetail, errInfo);
-      showError(`Stream error: ${errType}/${errDetail}`, hasBackup);
+      showError('Stream unavailable — network error', hasBackup);
     });
     hlsInstance.attachMediaElement(vid);
     hlsInstance.load();
