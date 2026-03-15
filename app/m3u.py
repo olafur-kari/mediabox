@@ -19,16 +19,37 @@ def _channel_id(name: str) -> str:
     return hashlib.md5(name.encode()).hexdigest()
 
 
-def _parse_group(guide_name: str) -> str:
-    """Extract group from channel name.
-    Priority: text inside last [brackets], then prefix before ':'."""
+COUNTRY_NAMES = {
+    "IS": "Ísland",
+    "NO": "Noregur",
+    "SE": "Svíþjóð",
+    "DK": "Danmörk",
+    "UK": "Bretland",
+    "GR": "Grikkland",
+    "DE": "Þýskaland",
+    "FR": "Frakkland",
+    "ES": "Spánn",
+    "IT": "Ítalía",
+    "NL": "Holland",
+    "PL": "Pólland",
+    "PT": "Portúgal",
+    "US": "Bandaríkin",
+    "AU": "Ástralía",
+}
+
+
+def _parse_group(guide_name: str) -> Optional[str]:
+    """Extract country group from channel name prefix (e.g. 'IS: ...' → 'Ísland').
+    Returns None if not a recognised country channel."""
     bracket_match = re.search(r'\[([^\]]+)\]', guide_name)
     if bracket_match:
-        return bracket_match.group(1).strip()
+        code = bracket_match.group(1).strip().upper()
+        return COUNTRY_NAMES.get(code)
     colon_match = re.match(r'^([A-Z]{2,})\s*:', guide_name)
     if colon_match:
-        return colon_match.group(1).strip()
-    return "Other"
+        code = colon_match.group(1).strip().upper()
+        return COUNTRY_NAMES.get(code)
+    return None
 
 
 def _strip_backup_suffix(name: str) -> str:
@@ -63,46 +84,27 @@ def _load_groups_config() -> Dict:
     return {}
 
 
+_FLAG_MAP = {
+    "Ísland": "🇮🇸",
+    "Noregur": "🇳🇴",
+    "Svíþjóð": "🇸🇪",
+    "Danmörk": "🇩🇰",
+    "Bretland": "🇬🇧",
+    "Grikkland": "🇬🇷",
+    "Þýskaland": "🇩🇪",
+    "Frakkland": "🇫🇷",
+    "Spánn": "🇪🇸",
+    "Ítalía": "🇮🇹",
+    "Holland": "🇳🇱",
+    "Pólland": "🇵🇱",
+    "Portúgal": "🇵🇹",
+    "Bandaríkin": "🇺🇸",
+    "Ástralía": "🇦🇺",
+}
+
+
 def _group_flag(group_name: str) -> str:
-    """Return a flag emoji based on group name keywords."""
-    name_lower = group_name.lower()
-    if "iceland" in name_lower or "ísland" in name_lower or name_lower.startswith("is"):
-        return "🇮🇸"
-    if "uk" in name_lower or "united kingdom" in name_lower or "britain" in name_lower:
-        return "🇬🇧"
-    if "greece" in name_lower or "greek" in name_lower or "ελλάδα" in name_lower:
-        return "🇬🇷"
-    if "usa" in name_lower or "united states" in name_lower or "us " in name_lower:
-        return "🇺🇸"
-    if "germany" in name_lower or "deutsch" in name_lower:
-        return "🇩🇪"
-    if "france" in name_lower or "french" in name_lower:
-        return "🇫🇷"
-    if "spain" in name_lower or "spanish" in name_lower or "español" in name_lower:
-        return "🇪🇸"
-    if "italy" in name_lower or "italian" in name_lower:
-        return "🇮🇹"
-    if "sweden" in name_lower or "swedish" in name_lower:
-        return "🇸🇪"
-    if "norway" in name_lower or "norwegian" in name_lower:
-        return "🇳🇴"
-    if "denmark" in name_lower or "danish" in name_lower:
-        return "🇩🇰"
-    if "finland" in name_lower or "finnish" in name_lower:
-        return "🇫🇮"
-    if "netherlands" in name_lower or "dutch" in name_lower:
-        return "🇳🇱"
-    if "poland" in name_lower or "polish" in name_lower:
-        return "🇵🇱"
-    if "portugal" in name_lower or "portuguese" in name_lower:
-        return "🇵🇹"
-    if "sport" in name_lower:
-        return "⚽"
-    if "news" in name_lower:
-        return "📰"
-    if "movie" in name_lower or "film" in name_lower or "cinema" in name_lower:
-        return "🎬"
-    return "📺"
+    return _FLAG_MAP.get(group_name, "📺")
 
 
 async def fetch_channels() -> List[Dict]:
@@ -133,6 +135,8 @@ async def fetch_channels() -> List[Dict]:
 
         base_name = _strip_backup_suffix(guide_name)
         group = _parse_group(guide_name)
+        if group is None:
+            continue  # Skip non-country channels
 
         if base_name not in base_to_streams:
             base_to_streams[base_name] = []
