@@ -189,13 +189,12 @@
       padding: 8px 18px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 600;
     }
     .add-ch-submit:hover { opacity: 0.88; }
-    .search-add-btn {
-      display: block; width: 100%; text-align: left;
-      padding: 12px 16px; background: none; border: none;
-      border-top: 1px solid var(--border); color: var(--accent);
-      cursor: pointer; font-size: 13px;
+    .search-add-btn-inline {
+      background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.25);
+      border-radius: 6px; color: var(--accent); cursor: pointer;
+      font-size: 11px; font-weight: 600; padding: 3px 10px; white-space: nowrap;
     }
-    .search-add-btn:hover { background: rgba(88,166,255,0.06); }
+    .search-add-btn-inline:hover { background: rgba(88,166,255,0.2); }
 
     /* User area */
     .appbar-user {
@@ -1481,10 +1480,10 @@ function renderDropdown() {
     .map(x => x.ch);
 
   if (!results.length) {
-    searchDropdown.innerHTML = `
-      <div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>
-      <button class="search-add-btn" onclick="openAddChannel('${escHtml(q)}')">+ Add "${escHtml(q)}" as custom channel</button>
-    `;
+    searchDropdown.innerHTML = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
+    searchDropdown.classList.add('open');
+    searchProviderChannels(q);
+    return;
   } else {
     searchDropdown.innerHTML = `
       <div class="search-results-label">${results.length} channel${results.length > 1 ? 's' : ''}</div>
@@ -1517,6 +1516,56 @@ function selectSearch(channelId) {
   searchDropdown.classList.remove('open');
   searchInput.blur();
   playChannel(channelId);
+}
+
+async function searchProviderChannels(q) {
+  try {
+    const resp = await fetch(`/api/provider-search?q=${encodeURIComponent(q)}`);
+    const results = await resp.json();
+    // Only update if the query hasn't changed
+    if (searchInput.value.trim().toLowerCase() !== q) return;
+    if (!results.length) {
+      searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>`;
+    } else {
+      searchDropdown.innerHTML = `
+        <div class="search-results-label">From provider — not in your lineup</div>
+        ${results.map(ch => `
+          <div class="search-item provider-result">
+            <div class="search-item-logo">${escHtml(ch.name.slice(0,4).toUpperCase())}</div>
+            <div class="search-item-info">
+              <div class="search-item-name">${hl(ch.name.replace(/^[A-Z]{2}\s*:\s*/, ''), q)}</div>
+              <div class="search-item-meta">${escHtml(ch.group)}</div>
+            </div>
+            <div class="search-item-right">
+              <button class="search-add-btn-inline" onclick="addProviderChannel(${ch.id}, '${escHtml(ch.name)}', '${escHtml(ch.url)}')">+ Add</button>
+            </div>
+          </div>
+        `).join('')}
+      `;
+    }
+  } catch (_) {
+    searchDropdown.innerHTML = `<div class="search-no-results">Provider search unavailable</div>`;
+  }
+}
+
+async function addProviderChannel(providerId, name, url) {
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('url', url);
+  try {
+    const resp = await fetch('/api/custom-channels', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error();
+    const ch = await resp.json();
+    customChannels.push(ch);
+    mergeCustomChannels();
+    allChannels = groups.flatMap(g => g.channels.map(c => ({...c, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
+    renderGroupList();
+    renderChannels();
+    searchInput.value = '';
+    searchDropdown.classList.remove('open');
+  } catch (_) {
+    alert('Failed to add channel.');
+  }
 }
 
 // ── Custom Channels ───────────────────────────────────────────────────────────

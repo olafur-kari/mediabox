@@ -26,7 +26,8 @@ from app.health import (
     run_health_check,
 )
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
-from app.models import CustomChannel, Favorite, RecentlyWatched, User
+from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User
+from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
 
 DATABASE_URL = "sqlite:////data/mediabox.db"
 engine = create_engine(DATABASE_URL, echo=False)
@@ -48,6 +49,9 @@ async def lifespan(app: FastAPI):
     # Start background health check (first pass + loop)
     asyncio.create_task(run_health_check())
     asyncio.create_task(health_check_loop())
+    # Fetch full provider channel list in background (non-blocking)
+    asyncio.create_task(fetch_provider_channels(engine))
+    asyncio.create_task(provider_refresh_loop(engine))
     yield
 
 
@@ -346,3 +350,15 @@ async def api_delete_custom_channel(
     session.delete(ch)
     session.commit()
     return {"action": "deleted"}
+
+
+# ── Provider Search API ───────────────────────────────────────────────────────
+
+@app.get("/api/provider-search")
+async def api_provider_search(
+    q: str,
+    current_user: dict = Depends(get_current_user),
+):
+    if len(q) < 2:
+        return []
+    return search_provider_channels(engine, q)
