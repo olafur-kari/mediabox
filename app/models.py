@@ -22,3 +22,11 @@ class RecentlyWatched(SQLModel, table=True):
     user_id: int = Field(index=True)
     channel_id: str
     watched_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CustomChannel(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    url: str
+    added_by: int = Field(index=True)  # user_id
+    created_at: datetime = Field(default_factory=datetime.utcnow)

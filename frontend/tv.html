@@ -159,6 +159,44 @@
     .empty-state-hint a { color: var(--accent); text-decoration: none; }
     .empty-state-hint a:hover { text-decoration: underline; }
 
+    /* Add Channel Modal */
+    .add-ch-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6); z-index: 200;
+      align-items: center; justify-content: center;
+    }
+    .add-ch-overlay.open { display: flex; }
+    .add-ch-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px; width: 400px; max-width: 90vw;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .add-ch-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .add-ch-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .add-ch-input {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 9px 12px; font-size: 14px; color: var(--text); width: 100%; box-sizing: border-box;
+      outline: none;
+    }
+    .add-ch-input:focus { border-color: var(--accent); }
+    .add-ch-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+    .add-ch-cancel {
+      background: none; border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 16px; color: var(--muted); cursor: pointer; font-size: 13px;
+    }
+    .add-ch-submit {
+      background: var(--accent); border: none; border-radius: 8px;
+      padding: 8px 18px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    .add-ch-submit:hover { opacity: 0.88; }
+    .search-add-btn {
+      display: block; width: 100%; text-align: left;
+      padding: 12px 16px; background: none; border: none;
+      border-top: 1px solid var(--border); color: var(--accent);
+      cursor: pointer; font-size: 13px;
+    }
+    .search-add-btn:hover { background: rgba(88,166,255,0.06); }
+
     /* User area */
     .appbar-user {
       display: flex;
@@ -758,6 +796,21 @@
   </main>
 </div>
 
+<!-- Add Channel Modal -->
+<div class="add-ch-overlay" id="addChOverlay" onclick="closeAddChannel(event)">
+  <div class="add-ch-box" onclick="event.stopPropagation()">
+    <div class="add-ch-title">Add Custom Channel</div>
+    <label class="add-ch-label">Name</label>
+    <input class="add-ch-input" id="addChName" type="text" placeholder="e.g. RÚV 1" />
+    <label class="add-ch-label">Stream URL</label>
+    <input class="add-ch-input" id="addChUrl" type="text" placeholder="https://..." />
+    <div class="add-ch-actions">
+      <button class="add-ch-cancel" onclick="closeAddChannel()">Cancel</button>
+      <button class="add-ch-submit" onclick="submitAddChannel()">Add Channel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Player Modal -->
 <div class="overlay" id="overlay" onclick="maybeClose(event)">
   <div class="player-box" onclick="event.stopPropagation()">
@@ -795,6 +848,7 @@
 // ── State ────────────────────────────────────────────────────────────────────
 let groups = [];           // [{id, name, flag, channels:[...]}]
 let allChannels = [];      // flat list
+let customChannels = [];   // [{id, name, url}]
 let healthCache = {};      // {url: {health, ms, ...}}
 let favorites = new Set(); // channel_ids
 let recentIds = [];        // channel_ids ordered newest first
@@ -809,12 +863,13 @@ let hlsInstance = null;
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const [meResp, chResp, hlthResp, favResp, recentResp] = await Promise.all([
+    const [meResp, chResp, hlthResp, favResp, recentResp, customResp] = await Promise.all([
       fetch('/api/me'),
       fetch('/api/channels'),
       fetch('/api/health'),
       fetch('/api/favorites'),
       fetch('/api/recent'),
+      fetch('/api/custom-channels'),
     ]);
 
     if (meResp.status === 401) { window.location.href = '/login'; return; }
@@ -824,6 +879,8 @@ async function init() {
 
     const chData = await chResp.json();
     groups = chData.groups || [];
+    customChannels = await customResp.json();
+    mergeCustomChannels();
     allChannels = groups.flatMap(g => g.channels.map(ch => ({...ch, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
 
     healthCache = await hlthResp.json();
@@ -1424,7 +1481,10 @@ function renderDropdown() {
     .map(x => x.ch);
 
   if (!results.length) {
-    searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>`;
+    searchDropdown.innerHTML = `
+      <div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>
+      <button class="search-add-btn" onclick="openAddChannel('${escHtml(q)}')">+ Add "${escHtml(q)}" as custom channel</button>
+    `;
   } else {
     searchDropdown.innerHTML = `
       <div class="search-results-label">${results.length} channel${results.length > 1 ? 's' : ''}</div>
@@ -1457,6 +1517,64 @@ function selectSearch(channelId) {
   searchDropdown.classList.remove('open');
   searchInput.blur();
   playChannel(channelId);
+}
+
+// ── Custom Channels ───────────────────────────────────────────────────────────
+
+function mergeCustomChannels() {
+  if (!customChannels.length) return;
+  const customGroup = {
+    id: 'custom',
+    name: 'Custom',
+    flag: '📡',
+    channels: customChannels.map(c => ({
+      id: 'custom-' + c.id,
+      _customId: c.id,
+      name: c.name,
+      logo: c.name.slice(0, 4).toUpperCase(),
+      show: '',
+      group: 'Custom',
+      streams: [{ label: 'Primary', url: c.url, health: 'unknown' }],
+    })),
+  };
+  groups = groups.filter(g => g.id !== 'custom');
+  groups.push(customGroup);
+}
+
+function openAddChannel(prefill = '') {
+  document.getElementById('addChName').value = prefill;
+  document.getElementById('addChUrl').value = '';
+  document.getElementById('addChOverlay').classList.add('open');
+  setTimeout(() => document.getElementById(prefill ? 'addChUrl' : 'addChName').focus(), 50);
+}
+
+function closeAddChannel(e) {
+  if (e && e.target !== document.getElementById('addChOverlay')) return;
+  document.getElementById('addChOverlay').classList.remove('open');
+}
+
+async function submitAddChannel() {
+  const name = document.getElementById('addChName').value.trim();
+  const url = document.getElementById('addChUrl').value.trim();
+  if (!name || !url) return;
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('url', url);
+
+  try {
+    const resp = await fetch('/api/custom-channels', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error();
+    const ch = await resp.json();
+    customChannels.push(ch);
+    mergeCustomChannels();
+    allChannels = groups.flatMap(g => g.channels.map(c => ({...c, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
+    renderGroupList();
+    renderChannels();
+    document.getElementById('addChOverlay').classList.remove('open');
+  } catch (_) {
+    alert('Failed to add channel.');
+  }
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────

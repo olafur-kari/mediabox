@@ -26,7 +26,7 @@ from app.health import (
     run_health_check,
 )
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
-from app.models import Favorite, RecentlyWatched, User
+from app.models import CustomChannel, Favorite, RecentlyWatched, User
 
 DATABASE_URL = "sqlite:////data/mediabox.db"
 engine = create_engine(DATABASE_URL, echo=False)
@@ -163,6 +163,8 @@ def _resolve_threadfin_url(url: str) -> str:
 
 @app.get("/api/stream/{channel_id}")
 async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = Depends(get_current_user)):
+    if channel_id.startswith("custom-"):
+        return {"url": f"/proxy/stream/{channel_id}", "channel_id": channel_id}
     ch = get_channel_by_id(channel_id)
     if not ch:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -171,7 +173,6 @@ async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = 
         raise HTTPException(status_code=404, detail="No streams available")
     if stream_idx >= len(streams):
         stream_idx = 0
-    url = _resolve_threadfin_url(streams[stream_idx]["url"])
     return {"url": f"/proxy/stream/{channel_id}?stream_idx={stream_idx}", "channel_id": channel_id}
 
 
@@ -181,15 +182,22 @@ async def proxy_stream(channel_id: str, stream_idx: int = 0, mb_token: Optional[
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    ch = get_channel_by_id(channel_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    streams = ch.get("streams", [])
-    if not streams or stream_idx >= len(streams):
-        raise HTTPException(status_code=404, detail="Stream not found")
-
-    url = _resolve_threadfin_url(streams[stream_idx]["url"])
+    # Custom channel IDs are prefixed with "custom-"
+    if channel_id.startswith("custom-"):
+        custom_id = int(channel_id[7:])
+        with Session(engine) as s:
+            custom_ch = s.get(CustomChannel, custom_id)
+        if not custom_ch:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        url = custom_ch.url
+    else:
+        ch = get_channel_by_id(channel_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        streams = ch.get("streams", [])
+        if not streams or stream_idx >= len(streams):
+            raise HTTPException(status_code=404, detail="Stream not found")
+        url = _resolve_threadfin_url(streams[stream_idx]["url"])
 
     async def stream_generator():
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
@@ -299,3 +307,42 @@ async def api_add_recent(
         session.commit()
 
     return {"action": "added", "channel_id": channel_id}
+
+
+# ── Custom Channels API ───────────────────────────────────────────────────────
+
+@app.get("/api/custom-channels")
+async def api_get_custom_channels(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    channels = session.exec(select(CustomChannel)).all()
+    return [{"id": c.id, "name": c.name, "url": c.url} for c in channels]
+
+
+@app.post("/api/custom-channels")
+async def api_add_custom_channel(
+    name: str = Form(...),
+    url: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    ch = CustomChannel(name=name, url=url, added_by=current_user["user_id"])
+    session.add(ch)
+    session.commit()
+    session.refresh(ch)
+    return {"id": ch.id, "name": ch.name, "url": ch.url}
+
+
+@app.delete("/api/custom-channels/{channel_id}")
+async def api_delete_custom_channel(
+    channel_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    ch = session.get(CustomChannel, channel_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Not found")
+    session.delete(ch)
+    session.commit()
+    return {"action": "deleted"}
