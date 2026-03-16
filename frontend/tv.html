@@ -149,6 +149,21 @@
       color: var(--faint);
       font-size: 13px;
     }
+    .epg-time {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+      background: rgba(139,148,158,0.1);
+      color: var(--muted);
+      border: 1px solid rgba(139,148,158,0.15);
+    }
+    .epg-time.live {
+      background: rgba(248,81,73,0.1);
+      color: #f85149;
+      border-color: rgba(248,81,73,0.25);
+    }
     .search-fav-btn {
       background: none; border: none; cursor: pointer;
       color: var(--faint); font-size: 14px; padding: 2px 4px; line-height: 1;
@@ -742,7 +757,7 @@
         class="search-input"
         id="searchInput"
         type="text"
-        placeholder="Search channels…  press / to focus"
+        placeholder="Search channels or events…  press / to focus"
         autocomplete="off"
       >
       <span class="search-kbd" id="searchKbd">/</span>
@@ -1425,47 +1440,96 @@ function scoreChannel(ch, rawQ) {
   return 0;
 }
 
-function renderDropdown() {
-  const q = norm(searchInput.value.trim());
+function formatMinsUntil(mins) {
+  if (mins < 60) return `in ${mins}min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `in ${h}h ${m}min` : `in ${h}h`;
+}
+
+function renderChannelResult(ch, q) {
+  return `
+    <div class="search-item" onclick="selectSearch('${escHtml(ch.id)}')">
+      <div class="search-item-logo">${escHtml(ch.logo || '')}</div>
+      <div class="search-item-info">
+        <div class="search-item-name">${hl(ch.name.replace(/^[A-Z]{2}\s*:\s*/, ''), q)}</div>
+        <div class="search-item-meta">${escHtml(ch.groupName || '')}</div>
+      </div>
+      <div class="search-item-right">
+        <span class="search-item-group">${ch.groupFlag || ''} ${escHtml(ch.groupName || '')}</span>
+        <button class="search-fav-btn ${favorites.has(ch.id) ? 'on' : ''}"
+          onclick="event.stopPropagation(); toggleFavSearch('${escHtml(ch.id)}', this)"
+          title="${favorites.has(ch.id) ? 'Remove favorite' : 'Add to favorites'}">★</button>
+      </div>
+    </div>`;
+}
+
+function renderEpgResult(r, q) {
+  const chName = r.channel_name.replace(/^[A-Z]{2}\s*:\s*/, '');
+  const timeStr = r.live ? '● LIVE' : formatMinsUntil(r.minutes_until);
+  return `
+    <div class="search-item" onclick="selectSearch('${escHtml(r.channel_id)}')">
+      <div class="search-item-logo">${escHtml(chName.slice(0, 4).toUpperCase())}</div>
+      <div class="search-item-info">
+        <div class="search-item-name">${hl(r.title, q)}</div>
+        <div class="search-item-meta">${escHtml(chName)}</div>
+      </div>
+      <div class="search-item-right">
+        <span class="epg-time ${r.live ? 'live' : ''}">${timeStr}</span>
+      </div>
+    </div>`;
+}
+
+async function renderDropdown() {
+  const rawQ = searchInput.value.trim();
+  const q = norm(rawQ);
   if (!q) { searchDropdown.classList.remove('open'); return; }
   searchFocusIdx = -1;
 
-  const results = allChannels
-    .map(ch => ({ ch, score: scoreChannel(ch, q) }))
+  const chResults = allChannels
+    .map(ch => ({ ch, score: scoreChannel(ch, rawQ) }))
     .filter(x => x.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 12)
+    .slice(0, 8)
     .map(x => x.ch);
 
-  if (!results.length) {
-    searchDropdown.innerHTML = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
-    searchDropdown.classList.add('open');
-    searchProviderChannels(q);
-    return;
-  } else {
-    searchDropdown.innerHTML = `
-      <div class="search-results-label">${results.length} channel${results.length > 1 ? 's' : ''}</div>
-      ${results.map(ch => {
-        const best = (ch.streams || [])[bestStreamIdx(ch.streams || [])] || {};
-        return `
-          <div class="search-item" onclick="selectSearch('${escHtml(ch.id)}')">
-            <div class="search-item-logo">${escHtml(ch.logo || '')}</div>
-            <div class="search-item-info">
-              <div class="search-item-name">${hl(ch.name.replace(/^[A-Z]{2}\s*:\s*/, ''), q)}</div>
-              <div class="search-item-meta">${escHtml(ch.show || ch.groupName || '')}</div>
-            </div>
-            <div class="search-item-right">
-              <span class="search-item-group">${ch.groupFlag || ''} ${escHtml(ch.groupName || '')}</span>
-              <button class="search-fav-btn ${favorites.has(ch.id) ? 'on' : ''}"
-                onclick="event.stopPropagation(); toggleFavSearch('${escHtml(ch.id)}', this)"
-                title="${favorites.has(ch.id) ? 'Remove favorite' : 'Add to favorites'}">★</button>
-            </div>
-          </div>
-        `;
-      }).join('')}
-    `;
+  // Render channel results immediately (no waiting)
+  let html = '';
+  if (chResults.length) {
+    html += `<div class="search-results-label">Channels</div>`;
+    html += chResults.map(ch => renderChannelResult(ch, q)).join('');
   }
+  searchDropdown.innerHTML = html || `<div class="search-no-results">Searching…</div>`;
   searchDropdown.classList.add('open');
+
+  // Fetch EPG results in parallel
+  try {
+    const resp = await fetch(`/api/epg/search?q=${encodeURIComponent(rawQ)}`);
+    if (searchInput.value.trim() !== rawQ) return; // Query changed while fetching
+    const epgResults = await resp.json();
+
+    let newHtml = '';
+    if (chResults.length) {
+      newHtml += `<div class="search-results-label">Channels</div>`;
+      newHtml += chResults.map(ch => renderChannelResult(ch, q)).join('');
+    }
+    if (epgResults.length) {
+      newHtml += `<div class="search-results-label">On Now &amp; Coming Up</div>`;
+      newHtml += epgResults.slice(0, 8).map(r => renderEpgResult(r, q)).join('');
+    }
+    if (!chResults.length && !epgResults.length) {
+      newHtml = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
+      searchProviderChannels(rawQ);
+    }
+    searchDropdown.innerHTML = newHtml;
+    searchDropdown.classList.add('open');
+  } catch (_) {
+    // EPG unavailable — still show channel results
+    if (!chResults.length) {
+      searchDropdown.innerHTML = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
+      searchProviderChannels(rawQ);
+    }
+  }
 }
 
 function selectSearch(channelId) {
@@ -1480,7 +1544,7 @@ async function searchProviderChannels(q) {
     const resp = await fetch(`/api/provider-search?q=${encodeURIComponent(q)}`);
     const results = await resp.json();
     // Only update if the query hasn't changed
-    if (searchInput.value.trim().toLowerCase() !== q) return;
+    if (searchInput.value.trim() !== q) return;
     if (!results.length) {
       searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>`;
     } else {

@@ -22,6 +22,7 @@ from app.auth import (
     hash_password,
     verify_password,
 )
+from app.epg import fetch_epg, epg_refresh_loop, search_epg
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
 from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User
 from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
@@ -46,6 +47,9 @@ async def lifespan(app: FastAPI):
     # Fetch full provider channel list in background (non-blocking)
     asyncio.create_task(fetch_provider_channels(engine))
     asyncio.create_task(provider_refresh_loop(engine))
+    # Fetch EPG programme data in background
+    asyncio.create_task(fetch_epg())
+    asyncio.create_task(epg_refresh_loop())
     yield
 
 
@@ -326,6 +330,16 @@ async def api_delete_custom_channel(
     session.delete(ch)
     session.commit()
     return {"action": "deleted"}
+
+
+# ── EPG Search API ────────────────────────────────────────────────────────────
+
+@app.get("/api/epg/search")
+async def api_epg_search(q: str, current_user: dict = Depends(get_current_user)):
+    if len(q) < 2:
+        return []
+    channels_by_id = {ch["id"]: ch for ch in get_cached_channels()}
+    return search_epg(q, channels_by_id)
 
 
 # ── Provider Search API ───────────────────────────────────────────────────────
