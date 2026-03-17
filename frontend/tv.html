@@ -210,6 +210,20 @@
       font-size: 11px; font-weight: 600; padding: 3px 10px; white-space: nowrap;
     }
     .search-add-btn-inline:hover { background: rgba(88,166,255,0.2); }
+    .search-add-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px; cursor: pointer;
+      border-top: 1px solid rgba(255,255,255,0.03);
+      color: var(--accent); font-size: 13px;
+      transition: background 0.1s;
+    }
+    .search-add-row:hover { background: rgba(88,166,255,0.08); }
+    .search-add-icon {
+      width: 36px; height: 24px; border-radius: 5px;
+      background: rgba(88,166,255,0.1); border: 1px dashed rgba(88,166,255,0.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
 
     /* User area */
     .appbar-user {
@@ -1499,6 +1513,7 @@ async function renderDropdown() {
     html += `<div class="search-results-label">Channels</div>`;
     html += chResults.map(ch => renderChannelResult(ch, q)).join('');
   }
+  html += renderCustomSection(rawQ, q);
   searchDropdown.innerHTML = html || `<div class="search-no-results">Searching…</div>`;
   searchDropdown.classList.add('open');
 
@@ -1521,6 +1536,7 @@ async function renderDropdown() {
       newHtml = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
       searchProviderChannels(rawQ);
     }
+    newHtml += renderCustomSection(rawQ, q);
     searchDropdown.innerHTML = newHtml;
     searchDropdown.classList.add('open');
   } catch (_) {
@@ -1530,6 +1546,24 @@ async function renderDropdown() {
       searchProviderChannels(rawQ);
     }
   }
+}
+
+function renderCustomSection(rawQ, q) {
+  const matched = customChannels.filter(c => norm(c.name).includes(q));
+  let html = `<div class="search-results-label">Custom Channels</div>`;
+  html += matched.map(c => `
+    <div class="search-item" onclick="selectSearch('custom-${c.id}')">
+      <div class="search-item-logo">${escHtml(c.name.slice(0,4).toUpperCase())}</div>
+      <div class="search-item-info">
+        <div class="search-item-name">${hl(c.name, q)}</div>
+        <div class="search-item-meta">Custom</div>
+      </div>
+    </div>`).join('');
+  html += `<div class="search-add-row" onclick="openAddChannel(${JSON.stringify(rawQ)})">
+    <div class="search-add-icon">+</div>
+    <span>Add "${escHtml(rawQ)}" as custom channel</span>
+  </div>`;
+  return html;
 }
 
 function selectSearch(channelId) {
