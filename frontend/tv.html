@@ -1217,9 +1217,32 @@ async function toggleCurrentFav() {
 }
 
 // ── Playback ─────────────────────────────────────────────────────────────────
+let _heartbeatInterval = null;
+
+function _startHeartbeat() {
+  _stopHeartbeat();
+  _heartbeatInterval = setInterval(() => {
+    fetch('/api/stream/heartbeat', { method: 'POST' }).catch(() => {});
+  }, 15000);
+}
+
+function _stopHeartbeat() {
+  if (_heartbeatInterval) { clearInterval(_heartbeatInterval); _heartbeatInterval = null; }
+}
+
 async function playChannel(channelId) {
   const ch = findChannel(channelId);
   if (!ch) return;
+
+  // Claim a stream slot — may be rejected if all slots are in use
+  try {
+    const res = await fetch('/api/stream/start', { method: 'POST' });
+    if (res.status === 409) {
+      const data = await res.json();
+      alert(data.detail || 'All streams are currently in use. Try again later.');
+      return;
+    }
+  } catch (_) {}
 
   currentChannelId = channelId;
   activeStreamIdx = bestStreamIdx(ch.streams || []);
@@ -1245,6 +1268,7 @@ async function playChannel(channelId) {
   document.getElementById('overlay').classList.add('open');
 
   renderChannels();
+  _startHeartbeat();
 
   await loadStream(channelId, activeStreamIdx);
 }
@@ -1403,6 +1427,8 @@ function stopPlaying() {
   vid.pause();
   vid.src = '';
   currentChannelId = null;
+  _stopHeartbeat();
+  fetch('/api/stream/stop', { method: 'POST' }).catch(() => {});
   document.getElementById('nowBar').style.display = 'none';
   renderChannels();
 }
@@ -1881,6 +1907,16 @@ document.addEventListener('keydown', e => {
       searchInput.blur();
     }
   }
+});
+
+// Release stream slot when tab is closed or navigated away
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && currentChannelId) {
+    navigator.sendBeacon('/api/stream/stop');
+  }
+});
+window.addEventListener('pagehide', () => {
+  if (currentChannelId) navigator.sendBeacon('/api/stream/stop');
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

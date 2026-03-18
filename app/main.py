@@ -2,6 +2,7 @@ import asyncio
 import os
 import secrets
 import string
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
@@ -32,6 +33,25 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
+# ── Stream concurrency limit ───────────────────────────────────────────────────
+STREAM_LIMIT = int(os.environ.get("STREAM_LIMIT", "2"))
+HEARTBEAT_TIMEOUT = 20  # seconds — session expires if no heartbeat received
+
+# user_id → last heartbeat timestamp
+_active_sessions: dict[int, float] = {}
+
+
+async def _session_expiry_loop():
+    """Background task: evict sessions that haven't heartbeated recently."""
+    while True:
+        await asyncio.sleep(5)
+        cutoff = time.monotonic() - HEARTBEAT_TIMEOUT
+        expired = [uid for uid, ts in _active_sessions.items() if ts < cutoff]
+        for uid in expired:
+            _active_sessions.pop(uid, None)
+        if expired:
+            print(f"[streams] Expired {len(expired)} inactive session(s)")
+
 
 def get_session():
     with Session(engine) as session:
@@ -50,6 +70,8 @@ async def lifespan(app: FastAPI):
     # Fetch EPG programme data in background
     asyncio.create_task(fetch_epg())
     asyncio.create_task(epg_refresh_loop())
+    # Expire stale stream sessions
+    asyncio.create_task(_session_expiry_loop())
     yield
 
 
@@ -158,6 +180,44 @@ async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = 
     if stream_idx >= len(streams):
         stream_idx = 0
     return {"url": f"/proxy/stream/{channel_id}?stream_idx={stream_idx}", "channel_id": channel_id}
+
+
+@app.post("/api/stream/start")
+async def api_stream_start(current_user: dict = Depends(get_current_user)):
+    """Register a stream session. Admins bypass the limit."""
+    user_id = current_user["user_id"]
+    is_admin = current_user.get("is_admin", False)
+
+    # Already has an active session — just refresh it
+    if user_id in _active_sessions:
+        _active_sessions[user_id] = time.monotonic()
+        return {"ok": True, "active": len(_active_sessions), "limit": STREAM_LIMIT}
+
+    if not is_admin and len(_active_sessions) >= STREAM_LIMIT:
+        raise HTTPException(
+            status_code=409,
+            detail=f"All {STREAM_LIMIT} streams are currently in use. Try again later.",
+        )
+
+    _active_sessions[user_id] = time.monotonic()
+    print(f"[streams] Session started for user {user_id} ({len(_active_sessions)}/{STREAM_LIMIT} active)")
+    return {"ok": True, "active": len(_active_sessions), "limit": STREAM_LIMIT}
+
+
+@app.post("/api/stream/heartbeat")
+async def api_stream_heartbeat(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    if user_id in _active_sessions:
+        _active_sessions[user_id] = time.monotonic()
+    return {"ok": True}
+
+
+@app.post("/api/stream/stop")
+async def api_stream_stop(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    _active_sessions.pop(user_id, None)
+    print(f"[streams] Session ended for user {user_id} ({len(_active_sessions)}/{STREAM_LIMIT} active)")
+    return {"ok": True}
 
 
 @app.get("/proxy/stream/{channel_id}")
