@@ -792,6 +792,16 @@
     }
     .player-fav:hover { transform: scale(1.2); }
     .player-fav.on { color: #f7a832; }
+    .player-fs {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      color: var(--faint);
+      transition: color 0.15s;
+      padding: 4px 8px;
+    }
+    .player-fs:hover { color: var(--text); }
     .player-close {
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.08);
@@ -958,6 +968,7 @@
         <div class="player-show" id="pShow"></div>
       </div>
       <button class="player-fav" id="pFav" onclick="toggleCurrentFav()">★</button>
+      <button class="player-fs" id="fsBtn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
       <button class="player-close" onclick="closePlayer()">✕ Close</button>
     </div>
   </div>
@@ -983,6 +994,7 @@ let hlsInstance = null;
 let _stallTimestamps = [];       // rolling window of stall event times
 let _stallSustainTimer = null;   // fires if stall lasts > 5s continuously
 let _congestionDismissed = false;// user dismissed toast for this stream session
+let _congestionShowCount = 0;    // auto-suppress after showing too many times
 let _playingGraceTimer = null;   // debounce hide on 'playing' events
 let _congestionAbort = null;     // AbortController to detach listeners on stream switch
 
@@ -1464,6 +1476,7 @@ function resetCongestionState() {
   _congestionAbort = new AbortController();
   _stallTimestamps = [];
   _congestionDismissed = false;
+  _congestionShowCount = 0;
   clearTimeout(_stallSustainTimer);
   clearTimeout(_playingGraceTimer);
   _stallSustainTimer = null;
@@ -1474,6 +1487,9 @@ function resetCongestionState() {
 
 function showCongestionToast(hasBackup) {
   if (_congestionDismissed) return;
+  // Auto-suppress after 3 appearances — stream is clearly struggling, no need to keep nagging
+  if (_congestionShowCount >= 3) { _congestionDismissed = true; return; }
+  _congestionShowCount++;
   const toast = document.getElementById('congestionToast');
   document.getElementById('congestionSwitchBtn').style.display = hasBackup ? '' : 'none';
   toast.classList.add('show');
@@ -1932,6 +1948,33 @@ document.addEventListener('keydown', e => {
       searchInput.blur();
     }
   }
+});
+
+// ── Fullscreen ────────────────────────────────────────────────────────────────
+function toggleFullscreen() {
+  const screen = document.querySelector('.player-screen');
+  if (!document.fullscreenElement) {
+    screen.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const vid = document.getElementById('vid');
+  const screen = document.querySelector('.player-screen');
+
+  // If the video itself went fullscreen (native button), redirect to player-screen
+  // so that the congestion toast and overlays remain visible
+  if (document.fullscreenElement === vid) {
+    document.exitFullscreen().then(() => {
+      screen.requestFullscreen().catch(() => {});
+    });
+    return;
+  }
+
+  const btn = document.getElementById('fsBtn');
+  if (btn) btn.textContent = document.fullscreenElement ? '✕ Exit' : '⛶';
 });
 
 // ── Active users polling ──────────────────────────────────────────────────────
