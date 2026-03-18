@@ -943,7 +943,7 @@
         <div class="spinner"></div>
         <span class="spinner-text">Loading stream…</span>
       </div>
-      <video id="vid" controls playsinline></video>
+      <video id="vid" controls playsinline controlsList="nofullscreen"></video>
       <div class="congestion-toast" id="congestionToast">
         <span class="congestion-toast-icon">⚠️</span>
         <span class="congestion-toast-msg">Stream seems congested — switching to a backup may help</span>
@@ -1961,18 +1961,6 @@ function toggleFullscreen() {
 }
 
 document.addEventListener('fullscreenchange', () => {
-  const vid = document.getElementById('vid');
-  const screen = document.querySelector('.player-screen');
-
-  // If the video itself went fullscreen (native button), redirect to player-screen
-  // so that the congestion toast and overlays remain visible
-  if (document.fullscreenElement === vid) {
-    document.exitFullscreen().then(() => {
-      screen.requestFullscreen().catch(() => {});
-    });
-    return;
-  }
-
   const btn = document.getElementById('fsBtn');
   if (btn) btn.textContent = document.fullscreenElement ? '✕ Exit' : '⛶';
 });
