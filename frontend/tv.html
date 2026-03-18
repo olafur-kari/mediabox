@@ -657,6 +657,51 @@
     }
     .try-backup-btn:hover { background: rgba(163,113,247,0.2); }
 
+    /* Congestion toast */
+    .congestion-toast {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.82);
+      backdrop-filter: blur(6px);
+      border-top: 1px solid rgba(255,200,80,0.2);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      transform: translateY(100%);
+      transition: transform 0.25s ease;
+      z-index: 10;
+    }
+    .congestion-toast.show { transform: translateY(0); }
+    .congestion-toast-icon { font-size: 16px; flex-shrink: 0; }
+    .congestion-toast-msg { font-size: 12px; color: rgba(255,200,80,0.9); flex: 1; }
+    .congestion-toast-btn {
+      background: rgba(255,200,80,0.12);
+      border: 1px solid rgba(255,200,80,0.3);
+      color: rgb(255,200,80);
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .congestion-toast-btn:hover { background: rgba(255,200,80,0.22); }
+    .congestion-toast-dismiss {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.3);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 2px 4px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .congestion-toast-dismiss:hover { color: rgba(255,255,255,0.6); }
+
     /* Stream picker */
     .stream-picker {
       padding: 12px 18px;
@@ -870,6 +915,12 @@
         <span class="spinner-text">Loading stream…</span>
       </div>
       <video id="vid" controls playsinline></video>
+      <div class="congestion-toast" id="congestionToast">
+        <span class="congestion-toast-icon">⚠️</span>
+        <span class="congestion-toast-msg">Stream seems congested — switching to a backup may help</span>
+        <button class="congestion-toast-btn" id="congestionSwitchBtn" onclick="congestionTryBackup()">Try Backup</button>
+        <button class="congestion-toast-dismiss" onclick="dismissCongestionToast()" title="Dismiss">✕</button>
+      </div>
       <div class="error-screen" id="errorScreen">
         <div class="error-screen-icon">📡</div>
         <div class="error-screen-msg" id="errorMsg">Stream unavailable</div>
@@ -908,6 +959,13 @@ let currentChannelId = null;
 let activeStreamIdx = 0;
 let searchFocusIdx = -1;
 let hlsInstance = null;
+
+// ── Congestion detection state ────────────────────────────────────────────────
+let _stallTimestamps = [];       // rolling window of stall event times
+let _stallSustainTimer = null;   // fires if stall lasts > 5s continuously
+let _congestionDismissed = false;// user dismissed toast for this stream session
+let _playingGraceTimer = null;   // debounce hide on 'playing' events
+let _congestionAbort = null;     // AbortController to detach listeners on stream switch
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 async function init() {
@@ -1235,6 +1293,7 @@ function startHls(url, ch, streamIdx) {
 
   showSpinner();
   hideError();
+  resetCongestionState();
 
   const isM3u8 = url.includes('.m3u8');
   const streams = ch.streams || [];
@@ -1271,6 +1330,8 @@ function startHls(url, ch, streamIdx) {
       showError('Stream unavailable', hasBackup);
     }, { once: true });
   }
+
+  attachCongestionListeners(hasBackup);
 }
 
 function tryNextBackup() {
@@ -1348,6 +1409,73 @@ function stopPlaying() {
 
 function closePlayer() {
   document.getElementById('overlay').classList.remove('open');
+  stopPlaying();
+}
+
+// ── Congestion detection ──────────────────────────────────────────────────────
+function resetCongestionState() {
+  if (_congestionAbort) { _congestionAbort.abort(); }
+  _congestionAbort = new AbortController();
+  _stallTimestamps = [];
+  _congestionDismissed = false;
+  clearTimeout(_stallSustainTimer);
+  clearTimeout(_playingGraceTimer);
+  _stallSustainTimer = null;
+  _playingGraceTimer = null;
+  document.getElementById('congestionToast').classList.remove('show');
+  document.getElementById('congestionSwitchBtn').style.display = '';
+}
+
+function showCongestionToast(hasBackup) {
+  if (_congestionDismissed) return;
+  const toast = document.getElementById('congestionToast');
+  document.getElementById('congestionSwitchBtn').style.display = hasBackup ? '' : 'none';
+  toast.classList.add('show');
+}
+
+function hideCongestionToast() {
+  document.getElementById('congestionToast').classList.remove('show');
+}
+
+function dismissCongestionToast() {
+  _congestionDismissed = true;
+  hideCongestionToast();
+}
+
+function congestionTryBackup() {
+  hideCongestionToast();
+  tryNextBackup();
+}
+
+function attachCongestionListeners(hasBackup) {
+  const vid = document.getElementById('vid');
+
+  vid.addEventListener('waiting', function onWaiting() {
+    if (_congestionDismissed) return;
+    const now = Date.now();
+    _stallTimestamps.push(now);
+    // Keep only stalls in the last 30 seconds
+    _stallTimestamps = _stallTimestamps.filter(t => now - t < 30000);
+
+    // 3+ stalls in 30s → show toast
+    if (_stallTimestamps.length >= 3) {
+      showCongestionToast(hasBackup);
+    }
+
+    // If stall sustains for 5s → show toast immediately
+    clearTimeout(_stallSustainTimer);
+    _stallSustainTimer = setTimeout(() => {
+      if (vid.readyState < 3) showCongestionToast(hasBackup);
+    }, 5000);
+  }, { signal: _congestionAbort.signal });
+
+  vid.addEventListener('playing', function onPlaying() {
+    clearTimeout(_stallSustainTimer);
+    _stallSustainTimer = null;
+    // Grace period: hide toast only if playback stays stable for 3s
+    clearTimeout(_playingGraceTimer);
+    _playingGraceTimer = setTimeout(hideCongestionToast, 3000);
+  }, { signal: _congestionAbort.signal });
 }
 
 function reopenPlayer(e) {

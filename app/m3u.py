@@ -56,7 +56,7 @@ def _strip_backup_suffix(name: str) -> str:
     """Strip backup-related suffixes to find the base channel name."""
     name = re.sub(r'\s+\(?B\d?\)?$', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s+Backup\s*\d*$', '', name, flags=re.IGNORECASE)
-    name = re.sub(r'\s+(FHD|UHD|4K)$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+(FHD|UHD|4K|HD)(\s+P\d+)?$', '', name, flags=re.IGNORECASE)
     return name.strip()
 
 
