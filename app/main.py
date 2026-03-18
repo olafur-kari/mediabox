@@ -62,6 +62,14 @@ def get_session():
 async def lifespan(app: FastAPI):
     # Create tables
     SQLModel.metadata.create_all(engine)
+    # Migrate: add columns that may not exist in older DBs
+    with engine.connect() as conn:
+        for col, ddl in [("last_login", "DATETIME"), ("login_count", "INTEGER DEFAULT 0")]:
+            try:
+                conn.exec_driver_sql(f"ALTER TABLE user ADD COLUMN {col} {ddl}")
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
     # Fetch channels from Threadfin
     await fetch_channels()
     # Fetch full provider channel list in background (non-blocking)
@@ -124,6 +132,11 @@ async def api_login(
     if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    user.last_login = datetime.utcnow()
+    user.login_count = (user.login_count or 0) + 1
+    session.add(user)
+    session.commit()
+
     token = create_token(user.id, user.username)
     redirect = RedirectResponse("/", status_code=302)
     redirect.set_cookie(
@@ -180,6 +193,11 @@ async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = 
     if stream_idx >= len(streams):
         stream_idx = 0
     return {"url": f"/proxy/stream/{channel_id}?stream_idx={stream_idx}", "channel_id": channel_id}
+
+
+@app.get("/api/active-users")
+async def api_active_users(current_user: dict = Depends(get_current_user)):
+    return {"count": len(_active_sessions), "limit": STREAM_LIMIT}
 
 
 @app.post("/api/stream/start")
@@ -434,8 +452,14 @@ async def api_admin_list_users(
 ):
     users = session.exec(select(User)).all()
     return [
-        {"id": u.id, "username": u.username, "is_admin": u.is_admin,
-         "created_at": u.created_at.strftime("%Y-%m-%d") if u.created_at else None}
+        {
+            "id": u.id,
+            "username": u.username,
+            "is_admin": u.is_admin,
+            "created_at": u.created_at.strftime("%Y-%m-%d") if u.created_at else None,
+            "last_login": u.last_login.strftime("%Y-%m-%d %H:%M") if u.last_login else "Never",
+            "login_count": u.login_count or 0,
+        }
         for u in users
     ]
 

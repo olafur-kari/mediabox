@@ -52,6 +52,13 @@ def _parse_group(guide_name: str) -> Optional[str]:
     return None
 
 
+def _normalize_channel_name(name: str) -> str:
+    """Normalize minor spelling variants so channels from different M3U sources group together."""
+    # "TNT Sports N" and "TNT Sport N" are the same channel
+    name = re.sub(r'\bSports\b', 'Sport', name, flags=re.IGNORECASE)
+    return name
+
+
 def _strip_backup_suffix(name: str) -> str:
     """Strip backup-related suffixes to find the base channel name."""
     name = re.sub(r'\s+\(?B\d?\)?$', '', name, flags=re.IGNORECASE)
@@ -133,7 +140,7 @@ async def fetch_channels() -> List[Dict]:
         if not guide_name or not url:
             continue
 
-        base_name = _strip_backup_suffix(guide_name)
+        base_name = _normalize_channel_name(_strip_backup_suffix(guide_name))
         group = _parse_group(guide_name)
         if group is None:
             continue  # Skip non-country channels

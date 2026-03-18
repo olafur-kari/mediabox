@@ -9,6 +9,8 @@ class User(SQLModel, table=True):
     hashed_password: str
     is_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_login: Optional[datetime] = Field(default=None)
+    login_count: int = Field(default=0)
 
 
 class Favorite(SQLModel, table=True):

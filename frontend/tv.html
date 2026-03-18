@@ -255,15 +255,30 @@
       font-size: 16px; padding: 4px 8px; border-radius: 6px; transition: color 0.15s;
     }
     .settings-btn:hover { color: var(--text); }
+    .active-users-badge {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--muted);
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 20px; padding: 3px 10px;
+      white-space: nowrap;
+    }
+    .active-users-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #4caf50;
+      box-shadow: 0 0 5px #4caf5088;
+    }
     .settings-box { width: 480px; }
-    .user-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+    .user-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
     .user-row {
       display: flex; align-items: center; gap: 10px;
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 8px; padding: 8px 12px;
     }
-    .user-row-name { flex: 1; font-size: 13px; font-weight: 500; }
+    .user-row-name { font-size: 13px; font-weight: 500; }
+    .user-row-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
     .user-row-meta { font-size: 11px; color: var(--muted); }
+    .user-row-logins { font-size: 10px; color: var(--faint); }
     .user-row-admin { font-size: 10px; color: var(--accent); font-weight: 600;
       background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.2);
       border-radius: 4px; padding: 1px 6px; }
@@ -825,6 +840,10 @@
 
     <div class="appbar-user">
       <span class="appbar-username" id="usernameDisplay"></span>
+      <div class="active-users-badge" id="activeUsersBadge" title="Currently watching">
+        <span class="active-users-dot"></span>
+        <span id="activeUsersCount">0</span> watching
+      </div>
       <button class="settings-btn" id="settingsBtn" style="display:none" onclick="openSettings()" title="Settings">⚙</button>
       <form action="/api/auth/logout" method="post">
         <button class="logout-btn" type="submit">Sign out</button>
@@ -983,6 +1002,7 @@ async function init() {
     const me = await meResp.json();
     document.getElementById('usernameDisplay').textContent = me.username;
     if (me.is_admin) document.getElementById('settingsBtn').style.display = '';
+    refreshActiveUsers();
 
     const chData = await chResp.json();
     groups = chData.groups || [];
@@ -1854,9 +1874,14 @@ async function loadUsers() {
   const users = await resp.json();
   document.getElementById('userList').innerHTML = users.map(u => `
     <div class="user-row">
-      <div class="user-row-name">${escHtml(u.username)}</div>
-      ${u.is_admin ? '<span class="user-row-admin">admin</span>' : ''}
-      <span class="user-row-meta">${u.created_at || ''}</span>
+      <div class="user-row-info">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="user-row-name">${escHtml(u.username)}</span>
+          ${u.is_admin ? '<span class="user-row-admin">admin</span>' : ''}
+        </div>
+        <span class="user-row-meta">Last login: ${u.last_login || 'Never'}</span>
+        <span class="user-row-logins">Joined ${u.created_at || '?'} · ${u.login_count} login${u.login_count !== 1 ? 's' : ''}</span>
+      </div>
       ${u.is_admin ? '' : `<button class="user-del-btn" onclick="deleteUser(${u.id})" title="Remove">✕</button>`}
     </div>
   `).join('');
@@ -1908,6 +1933,17 @@ document.addEventListener('keydown', e => {
     }
   }
 });
+
+// ── Active users polling ──────────────────────────────────────────────────────
+async function refreshActiveUsers() {
+  try {
+    const res = await fetch('/api/active-users');
+    if (!res.ok) return;
+    const { count } = await res.json();
+    document.getElementById('activeUsersCount').textContent = count;
+  } catch (_) {}
+}
+setInterval(refreshActiveUsers, 15000);
 
 // Release stream slot when tab is closed or navigated away
 window.addEventListener('visibilitychange', () => {
