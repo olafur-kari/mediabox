@@ -792,16 +792,6 @@
     }
     .player-fav:hover { transform: scale(1.2); }
     .player-fav.on { color: #f7a832; }
-    .player-fs {
-      background: none;
-      border: none;
-      cursor: pointer;
-      font-size: 18px;
-      color: var(--faint);
-      transition: color 0.15s;
-      padding: 4px 8px;
-    }
-    .player-fs:hover { color: var(--text); }
     .player-close {
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.08);
@@ -943,7 +933,7 @@
         <div class="spinner"></div>
         <span class="spinner-text">Loading stream…</span>
       </div>
-      <video id="vid" controls playsinline controlsList="nofullscreen"></video>
+      <video id="vid" controls playsinline></video>
       <div class="congestion-toast" id="congestionToast">
         <span class="congestion-toast-icon">⚠️</span>
         <span class="congestion-toast-msg">Stream seems congested — switching to a backup may help</span>
@@ -968,7 +958,6 @@
         <div class="player-show" id="pShow"></div>
       </div>
       <button class="player-fav" id="pFav" onclick="toggleCurrentFav()">★</button>
-      <button class="player-fs" id="fsBtn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
       <button class="player-close" onclick="closePlayer()">✕ Close</button>
     </div>
   </div>
@@ -1335,17 +1324,21 @@ async function loadStream(channelId, streamIdx) {
   startHls(url, ch, streamIdx);
 }
 
-function startHls(url, ch, streamIdx) {
+async function startHls(url, ch, streamIdx) {
   const vid = document.getElementById('vid');
 
-  // Destroy existing player instance
+  // Destroy existing player instance and give Threadfin a moment to release
+  // the connection before opening the next one (avoids "no streams available")
   if (hlsInstance) {
     hlsInstance.destroy();
     hlsInstance = null;
+    vid.pause();
+    vid.src = '';
+    await new Promise(r => setTimeout(r, 400));
+  } else {
+    vid.pause();
+    vid.src = '';
   }
-
-  vid.pause();
-  vid.src = '';
 
   showSpinner();
   hideError();
@@ -1950,20 +1943,6 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// ── Fullscreen ────────────────────────────────────────────────────────────────
-function toggleFullscreen() {
-  const screen = document.querySelector('.player-screen');
-  if (!document.fullscreenElement) {
-    screen.requestFullscreen().catch(() => {});
-  } else {
-    document.exitFullscreen();
-  }
-}
-
-document.addEventListener('fullscreenchange', () => {
-  const btn = document.getElementById('fsBtn');
-  if (btn) btn.textContent = document.fullscreenElement ? '✕ Exit' : '⛶';
-});
 
 // ── Active users polling ──────────────────────────────────────────────────────
 async function refreshActiveUsers() {

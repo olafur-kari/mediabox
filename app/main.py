@@ -239,7 +239,7 @@ async def api_stream_stop(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/proxy/stream/{channel_id}")
-async def proxy_stream(channel_id: str, stream_idx: int = 0, mb_token: Optional[str] = Cookie(default=None)):
+async def proxy_stream(request: Request, channel_id: str, stream_idx: int = 0, mb_token: Optional[str] = Cookie(default=None)):
     user = _check_auth(mb_token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -265,6 +265,8 @@ async def proxy_stream(channel_id: str, stream_idx: int = 0, mb_token: Optional[
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             async with client.stream("GET", url) as resp:
                 async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    if await request.is_disconnected():
+                        break
                     yield chunk
 
     # Detect content type from URL
