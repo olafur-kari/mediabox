@@ -35,6 +35,7 @@ COUNTRY_NAMES = {
     "PT": "Portúgal",
     "US": "Bandaríkin",
     "AU": "Ástralía",
+    "CA": "Kanada",
 }
 
 
@@ -107,6 +108,7 @@ _FLAG_MAP = {
     "Portúgal": "🇵🇹",
     "Bandaríkin": "🇺🇸",
     "Ástralía": "🇦🇺",
+    "Kanada": "🇨🇦",
 }
 
 
