@@ -4,7 +4,7 @@ services:
     container_name: threadfin
     restart: unless-stopped
     ports:
-      - "34400:34400"
+      - "100.104.189.115:34400:34400"
     environment:
       - THREADFIN_PORT=34400
       - THREADFIN_HOST=100.104.189.115
@@ -16,7 +16,7 @@ services:
     container_name: mediabox-ui
     restart: unless-stopped
     ports:
-      - "8888:8888"
+      - "100.104.189.115:8888:8888"
     volumes:
       - ./data:/data
     environment:
