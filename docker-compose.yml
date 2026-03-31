@@ -16,7 +16,7 @@ services:
     container_name: mediabox-ui
     restart: unless-stopped
     ports:
-      - "100.104.189.115:8888:8888"
+      - "127.0.0.1:8888:8888"
     volumes:
       - ./data:/data
     environment:
