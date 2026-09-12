@@ -46,6 +46,18 @@ _COUNTRY_ALIASES = {
 # Empty this set when an Icelandic source is added, so IS means Ísland again.
 EXCLUDED_COUNTRY_CODES = {"IS"}
 
+# Quality tag the provider puts at the end of a channel name. Treat it as a claim,
+# not a fact: dnstream ships 1280x720 feeds labelled UHD. Real resolution comes from
+# StreamQuality when it has been measured.
+_QUALITY_RE = re.compile(r"\b(4K|UHD|FHD|HD|SD)\b(?:\s+P\d+)?\s*$", re.IGNORECASE)
+_QUALITY_RANK = {"4K": 4, "UHD": 4, "FHD": 3, "HD": 2, "SD": 1}
+
+
+def _quality_tag(name: str) -> str:
+    m = _QUALITY_RE.search(name.strip())
+    return m.group(1).upper() if m else ""
+
+
 # Providers pad their category lists with separator rows: "##### UK - SPORTS #####"
 _SEPARATOR_RE = re.compile(r"^\s*#")
 
@@ -176,8 +188,41 @@ def _group_flag(group_name: str) -> str:
     return _FLAG_MAP.get(group_name, "📺")
 
 
-async def fetch_channels() -> List[Dict]:
-    """Fetch and parse the Threadfin lineup, returning grouped channels."""
+def _rank_streams(streams: List[Dict], quality_map: Dict[str, Dict]) -> List[Dict]:
+    """Best stream first, labelled with what it actually is.
+
+    Measured resolution wins; the provider's label is only a tie-breaker, because it
+    is frequently wrong. Labels shown to the user say "1080p" when we have measured
+    it and fall back to the provider's claim ("UHD") when we have not.
+    """
+    for s in streams:
+        measured = quality_map.get(s["guide_name"]) or {}
+        s["height"] = measured.get("height", 0)
+        s["width"] = measured.get("width", 0)
+        s["codec"] = measured.get("codec", "")
+
+    streams.sort(key=lambda s: (-s["height"], -_QUALITY_RANK.get(s["quality"], 0)))
+
+    for i, s in enumerate(streams):
+        if s["height"]:
+            s["label"] = f"{s['height']}p"
+        elif s["quality"]:
+            s["label"] = s["quality"]
+        else:
+            s["label"] = "Primary" if i == 0 else f"Backup {i}"
+        s["measured"] = bool(s["height"])
+        s.setdefault("health", "unknown")
+    return streams
+
+
+
+async def fetch_channels(quality_map: Optional[Dict[str, Dict]] = None) -> List[Dict]:
+    """Fetch and parse the Threadfin lineup, returning grouped channels.
+
+    quality_map: {guide_name: {"width", "height", "codec"}} from measurement, used
+    to order and label the variants of a channel. Falls back to the provider's own
+    quality tag where nothing has been measured.
+    """
     global _channels_cache, _groups_cache
 
     try:
@@ -225,21 +270,16 @@ async def fetch_channels() -> List[Dict]:
                 "logo": _logo_abbr(base_name),
             }
 
-        is_primary = len(base_to_streams[key]) == 0
-        if is_primary:
-            label = "Primary"
-        else:
-            label = f"Backup {len(base_to_streams[key])}"
-
         base_to_streams[key].append({
-            "label": label,
+            "guide_name": guide_name,
+            "quality": _quality_tag(rest),
             "url": url,
-            "health": "unknown",
         })
 
     channels: List[Dict] = []
     for key, streams in base_to_streams.items():
         meta = base_to_meta[key]
+        streams = _rank_streams(streams, quality_map or {})
         channels.append({
             "id": _channel_id(meta["country"], meta["name"]),
             "name": meta["name"],

@@ -26,8 +26,9 @@ from app.auth import (
 )
 from app.epg import fetch_epg, epg_refresh_loop, search_epg, epg_window_hours
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
-from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User, WatchKeyword
+from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, StreamQuality, User, WatchKeyword
 from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
+from app.quality import quality_probe_loop, run_quality_probe
 
 # Container default; override for a local run (see run-local.sh)
 DATA_DIR = os.environ.get("MEDIABOX_DATA_DIR", "/data")
@@ -72,6 +73,20 @@ def get_session():
         yield session
 
 
+def _load_quality_map() -> dict:
+    """Measured resolutions keyed by lineup GuideName, filled in by scripts/probe-quality.py."""
+    try:
+        with Session(engine) as session:
+            rows = session.exec(select(StreamQuality)).all()
+        return {
+            r.guide_name: {"width": r.width, "height": r.height, "codec": r.codec}
+            for r in rows if r.height
+        }
+    except Exception as e:
+        print(f"[m3u] Could not load measured stream quality: {e}")
+        return {}
+
+
 async def _lineup_loop():
     """Load the Threadfin lineup, retrying until it answers, then refresh hourly.
 
@@ -80,7 +95,7 @@ async def _lineup_loop():
     """
     delay = 5
     while True:
-        await fetch_channels()
+        await fetch_channels(_load_quality_map())
         if get_cached_channels():
             break
         print(f"[m3u] Lineup empty — retrying in {delay}s (Threadfin may still be starting)")
@@ -91,7 +106,7 @@ async def _lineup_loop():
 
     while True:
         await asyncio.sleep(3600)
-        await fetch_channels()
+        await fetch_channels(_load_quality_map())
 
 
 @asynccontextmanager
@@ -116,6 +131,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(epg_refresh_loop())
     # Expire stale stream sessions
     asyncio.create_task(_session_expiry_loop())
+    asyncio.create_task(quality_probe_loop(engine))
     yield
 
 
@@ -207,6 +223,7 @@ async def api_channels(current_user: dict = Depends(get_current_user)):
 
 
 def _pick_best_url(streams: list) -> str:
+    """Streams arrive ranked best-first from _rank_streams, so index 0 is the best."""
     return streams[0]["url"]
 
 
@@ -617,6 +634,18 @@ def _require_admin(current_user: dict = Depends(get_current_user)):
     if not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin only")
     return current_user
+
+
+@app.post("/api/admin/probe-quality")
+async def api_probe_quality(current_user: dict = Depends(_require_admin)):
+    """Measure resolutions now rather than waiting for the nightly run.
+
+    Takes a provider connection for a few seconds per stream, so it will interrupt
+    viewing on a single-connection subscription.
+    """
+    count = await run_quality_probe(engine)
+    await fetch_channels(_load_quality_map())
+    return {"ok": True, "measured": count}
 
 
 def _generate_password(length: int = 12) -> str:

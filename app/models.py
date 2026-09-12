@@ -49,3 +49,17 @@ class WatchKeyword(SQLModel, table=True):
     user_id: int = Field(index=True)
     keyword: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class StreamQuality(SQLModel, table=True):
+    """Measured video resolution for one provider stream.
+
+    Providers label streams UHD/FHD with no relation to reality — on dnstream the
+    same "UHD" tag sits on both 1280x720 and 1920x1080 feeds. Keyed by the lineup's
+    GuideName, filled in by scripts/probe-quality.py.
+    """
+    guide_name: str = Field(primary_key=True)
+    width: int = 0
+    height: int = 0
+    codec: str = ""
+    measured_at: datetime = Field(default_factory=datetime.utcnow)
