@@ -4,3 +4,5 @@ PRIVATE.md
 .venv
 __pycache__/
 *.pyc
+config/
+data/
