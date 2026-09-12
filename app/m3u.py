@@ -6,17 +6,13 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-THREADFIN_URL = os.environ.get("THREADFIN_URL", "http://100.104.189.115:34400")
+THREADFIN_URL = os.environ.get("THREADFIN_URL", "http://100.113.186.78:34400")
 LINEUP_URL = f"{THREADFIN_URL}/lineup.json"
-GROUPS_FILE = "/data/groups.json"
+GROUPS_FILE = os.path.join(os.environ.get("MEDIABOX_DATA_DIR", "/data"), "groups.json")
 
 # In-memory channel cache
 _channels_cache: List[Dict] = []
 _groups_cache: List[Dict] = []
-
-
-def _channel_id(name: str) -> str:
-    return hashlib.md5(name.encode()).hexdigest()
 
 
 COUNTRY_NAMES = {
@@ -38,46 +34,110 @@ COUNTRY_NAMES = {
     "CA": "Kanada",
 }
 
+# Providers spell the same country differently — fold the variants onto our codes.
+_COUNTRY_ALIASES = {
+    "NOR": "NO", "SWE": "SE", "DEN": "DK", "GER": "DE", "USA": "US",
+    "SPA": "ES", "ITA": "IT", "POR": "PT", "POL": "PL", "NED": "NL",
+    "GRE": "GR", "AUS": "AU", "CAN": "CA", "UKI": "UK", "FRA": "FR",
+}
 
-def _parse_group(guide_name: str) -> Optional[str]:
-    """Extract country group from channel name prefix (e.g. 'IS: ...' → 'Ísland').
-    Returns None if not a recognised country channel."""
-    bracket_match = re.search(r'\[([^\]]+)\]', guide_name)
-    if bracket_match:
-        code = bracket_match.group(1).strip().upper()
-        return COUNTRY_NAMES.get(code)
-    colon_match = re.match(r'^([A-Z]{2,})\s*:', guide_name)
-    if colon_match:
-        code = colon_match.group(1).strip().upper()
-        return COUNTRY_NAMES.get(code)
-    return None
+# Codes to drop even though they look like one of ours.
+# dnstream uses "IS" for Israel, which collides with our IS = Ísland.
+# Empty this set when an Icelandic source is added, so IS means Ísland again.
+EXCLUDED_COUNTRY_CODES = {"IS"}
+
+# Providers pad their category lists with separator rows: "##### UK - SPORTS #####"
+_SEPARATOR_RE = re.compile(r"^\s*#")
+
+# Short tokens that should stay upper-case when we tidy an ALL-CAPS channel name.
+_ACRONYMS = {
+    "BBC", "ITV", "TNT", "HBO", "ESPN", "NBC", "CBS", "ABC", "CNN", "MTV",
+    "SVT", "NRK", "DR", "RTL", "ZDF", "ARD", "CNBC", "BT", "TV", "TV2",
+    "PL", "F1", "NFL", "NBA", "NHL", "MLB", "UFC", "WWE", "EPL", "EFL",
+    "WSL", "VIP", "PPV", "US", "UK", "LA", "FA", "MSG", "AMC", "AXN",
+}
 
 
-def _normalize_channel_name(name: str) -> str:
-    """Normalize minor spelling variants so channels from different M3U sources group together."""
-    # "TNT Sports N" and "TNT Sport N" are the same channel
-    name = re.sub(r'\bSports\b', 'Sport', name, flags=re.IGNORECASE)
-    return name
+def _group_id(name: str) -> str:
+    return hashlib.md5(name.encode()).hexdigest()
 
 
 def _strip_backup_suffix(name: str) -> str:
-    """Strip backup-related suffixes to find the base channel name."""
+    """Strip backup/quality suffixes to find the base channel name."""
     name = re.sub(r'\s+\(?B\d?\)?$', '', name, flags=re.IGNORECASE)
     name = re.sub(r'\s+Backup\s*\d*$', '', name, flags=re.IGNORECASE)
-    name = re.sub(r'\s+(FHD|UHD|4K|HD)(\s+P\d+)?$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+(FHD|UHD|4K|HD|SD)(\s+P\d+)?$', '', name, flags=re.IGNORECASE)
     return name.strip()
+
+
+def _canonical_name(name: str) -> str:
+    """Provider-independent form of a channel name.
+
+    Different providers write the same channel differently — "Sky Sport Main Event",
+    "SKY SPORTS MAIN EVENTS UHD" — so identity is built from a flattened form rather
+    than the raw name. This is what keeps favourites alive across a provider change.
+    """
+    n = _strip_backup_suffix(name)
+    n = re.sub(r'\bSPORTS\b', 'SPORT', n, flags=re.IGNORECASE)
+    n = re.sub(r'\bEVENTS\b', 'EVENT', n, flags=re.IGNORECASE)
+    return re.sub(r'[^a-z0-9]+', ' ', n.lower()).strip()
+
+
+def _channel_id(country_code: str, name: str) -> str:
+    """Stable ID: country + canonical name. Country is part of identity because
+    providers carry the same channel in several languages (UK/IT/FR Sky Sport F1)."""
+    return hashlib.md5(f"{country_code}|{_canonical_name(name)}".encode()).hexdigest()
+
+
+def _split_country(guide_name: str):
+    """Split "UK - BBC 1 FHD" / "IS: RÚV" / "[NO] NRK1" into (code, rest).
+
+    Returns (None, name) when there is no recognisable country tag.
+    """
+    m = re.match(r'^\[([A-Za-z]{2,4})\]\s*(.+)$', guide_name)
+    if not m:
+        m = re.match(r'^([A-Za-z]{2,4})\s*[:\-]\s*(.+)$', guide_name)
+    if not m:
+        return None, guide_name.strip()
+    code = m.group(1).upper()
+    return _COUNTRY_ALIASES.get(code, code), m.group(2).strip()
+
+
+def _display_name(name: str) -> str:
+    """Tidy an ALL-CAPS provider name into something readable."""
+    if not name.isupper():
+        return name
+    words = []
+    for w in name.split():
+        if w in _ACRONYMS or not w.isalpha():
+            words.append(w)
+        else:
+            words.append(w.capitalize())
+    return " ".join(words)
+
+
+def identity_for(guide_name: str) -> Optional[str]:
+    """Channel ID for any raw provider or EPG name, or None if it isn't a channel we keep.
+
+    Shared by the lineup, the EPG matcher and the favourites migration so all three
+    agree on what counts as "the same channel".
+    """
+    if not guide_name or _SEPARATOR_RE.match(guide_name):
+        return None
+    code, rest = _split_country(guide_name)
+    if not code or code in EXCLUDED_COUNTRY_CODES or code not in COUNTRY_NAMES:
+        return None
+    return _channel_id(code, rest)
 
 
 def _logo_abbr(name: str) -> str:
     """Generate a short abbreviation for the channel logo placeholder."""
-    clean = re.sub(r'^[A-Z]{2}\s*:\s*', '', name)
-    clean = re.sub(r'\s*\[.*?\]', '', clean).strip()
+    clean = re.sub(r'\s*\[.*?\]', '', name).strip()
     words = clean.split()
     if not words:
         return "TV"
     if len(words) == 1:
         return words[0][:4].upper()
-    # Use initials for multi-word names
     abbr = ''.join(w[0] for w in words if w[0].isalpha())[:4].upper()
     return abbr if abbr else words[0][:4].upper()
 
@@ -129,87 +189,89 @@ async def fetch_channels() -> List[Dict]:
         print(f"[m3u] Failed to fetch lineup from {LINEUP_URL}: {e}")
         return _channels_cache  # Return cached if available
 
-    # lineup is a list of {GuideName, GuideNumber, URL, ...}
     raw_channels = lineup if isinstance(lineup, list) else []
 
-    # Group by base name (stripping backup suffixes)
     base_to_streams: Dict[str, List[Dict]] = {}
     base_to_meta: Dict[str, Dict] = {}
+    skipped_no_country = 0
+    skipped_excluded = 0
 
     for item in raw_channels:
         guide_name = item.get("GuideName", "").strip()
         url = item.get("URL", "").strip()
         if not guide_name or not url:
             continue
+        if _SEPARATOR_RE.match(guide_name):
+            continue  # provider category separator row, not a channel
 
-        base_name = _normalize_channel_name(_strip_backup_suffix(guide_name))
-        group = _parse_group(guide_name)
+        code, rest = _split_country(guide_name)
+        if code in EXCLUDED_COUNTRY_CODES:
+            skipped_excluded += 1
+            continue
+        group = COUNTRY_NAMES.get(code) if code else None
         if group is None:
-            continue  # Skip non-country channels
+            skipped_no_country += 1
+            continue
 
-        if base_name not in base_to_streams:
-            base_to_streams[base_name] = []
-            base_to_meta[base_name] = {
+        base_name = _display_name(_strip_backup_suffix(rest))
+        key = f"{code}|{_canonical_name(rest)}"
+
+        if key not in base_to_streams:
+            base_to_streams[key] = []
+            base_to_meta[key] = {
                 "group": group,
+                "name": base_name,
+                "country": code,
                 "logo": _logo_abbr(base_name),
             }
 
-        is_primary = len(base_to_streams[base_name]) == 0
-        suffix_match = re.search(r'\s+(\(B\d?\)|B\d?|Backup\s*\d*|FHD|UHD|4K)$', guide_name, flags=re.IGNORECASE)
+        is_primary = len(base_to_streams[key]) == 0
         if is_primary:
             label = "Primary"
-        elif suffix_match:
-            suffix = suffix_match.group(1).strip()
-            backup_num = len(base_to_streams[base_name])
-            label = f"Backup {backup_num}"
         else:
-            label = f"Backup {len(base_to_streams[base_name])}"
+            label = f"Backup {len(base_to_streams[key])}"
 
-        base_to_streams[base_name].append({
+        base_to_streams[key].append({
             "label": label,
             "url": url,
             "health": "unknown",
         })
 
-    # Build channel objects
     channels: List[Dict] = []
-    for base_name, streams in base_to_streams.items():
-        meta = base_to_meta[base_name]
-        ch_id = _channel_id(base_name)
+    for key, streams in base_to_streams.items():
+        meta = base_to_meta[key]
         channels.append({
-            "id": ch_id,
-            "name": base_name,
+            "id": _channel_id(meta["country"], meta["name"]),
+            "name": meta["name"],
             "logo": meta["logo"],
             "show": "",
             "group": meta["group"],
+            "country": meta["country"],
             "streams": streams,
         })
 
-    # Sort channels by name within each group
     channels.sort(key=lambda c: (c["group"], c["name"]))
-
     _channels_cache = channels
 
-    # Build groups structure
     groups_map: Dict[str, List[Dict]] = {}
     for ch in channels:
-        g = ch["group"]
-        if g not in groups_map:
-            groups_map[g] = []
-        groups_map[g].append(ch)
+        groups_map.setdefault(ch["group"], []).append(ch)
 
     groups_config = _load_groups_config()
     _groups_cache = []
     for g_name, g_channels in groups_map.items():
         config = groups_config.get(g_name, {})
         _groups_cache.append({
-            "id": _channel_id(g_name),
+            "id": _group_id(g_name),
             "name": config.get("name", g_name),
             "flag": config.get("flag", _group_flag(g_name)),
             "channels": g_channels,
         })
 
     _groups_cache.sort(key=lambda g: g["name"])
+
+    print(f"[m3u] Lineup: {len(channels)} channels in {len(_groups_cache)} groups "
+          f"(skipped {skipped_no_country} without a country tag, {skipped_excluded} excluded)")
 
     return _channels_cache
 

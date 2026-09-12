@@ -4,10 +4,10 @@ services:
     container_name: threadfin
     restart: unless-stopped
     ports:
-      - "100.104.189.115:34400:34400"
+      - "100.113.186.78:34400:34400"
     environment:
       - THREADFIN_PORT=34400
-      - THREADFIN_HOST=100.104.189.115
+      - THREADFIN_HOST=100.113.186.78
     volumes:
       - ./config/threadfin:/home/threadfin/conf
 
@@ -20,7 +20,13 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - THREADFIN_URL=http://100.104.189.115:34400
+      - THREADFIN_URL=http://100.113.186.78:34400
+      - M3U_URL=${M3U_URL}
+      - EPG_URL=${EPG_URL}
       - JWT_SECRET=${JWT_SECRET}
+      # Distinct channels open at once — must not exceed the provider's connection limit
+      - STREAM_LIMIT=${STREAM_LIMIT:-1}
+      - EPG_WINDOW_HOURS=${EPG_WINDOW_HOURS:-72}
+      - PYTHONUNBUFFERED=1
     depends_on:
       - threadfin

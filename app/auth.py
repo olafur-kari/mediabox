@@ -14,7 +14,8 @@ _engine = None
 def _get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(f"sqlite:////data/mediabox.db", echo=False)
+        _data_dir = os.environ.get("MEDIABOX_DATA_DIR", "/data")
+        _engine = create_engine(f"sqlite:///{os.path.join(_data_dir, 'mediabox.db')}", echo=False)
     return _engine
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "insecure-default-change-me")

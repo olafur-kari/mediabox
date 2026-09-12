@@ -2,11 +2,11 @@
 
 ## Repo
 - Local: `/Users/olafurkari/Repos/mediabox`
-- Same server as Pulse: `ssh oli@100.104.189.115`, project dir `~/mediabox`
+- Same server as Pulse: `ssh oli@100.113.186.78`, project dir `~/mediabox`
 
 
 ## Goal
-Self-hosted media stack on the same server as Pulse (100.104.189.115).
+Self-hosted media stack on the same server as Pulse (100.113.186.78).
 Two things in one: automated movie/TV downloads + IPTV live TV with favorites.
 
 ## Stack
@@ -18,7 +18,7 @@ Two things in one: automated movie/TV downloads + IPTV live TV with favorites.
 - All in Docker Compose, new directory `~/mediabox` on server, separate from Pulse
 
 ## Server
-- Same machine as Pulse: `100.104.189.115` (Tailscale), `ssh oli@100.104.189.115`
+- Same machine as Pulse: `100.113.186.78` (Tailscale), `ssh oli@100.113.186.78`
 - Already running Docker + Docker Compose
 
 ## Plex

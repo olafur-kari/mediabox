@@ -10,7 +10,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.models import User
 from app.auth import add_user
 
-DATABASE_URL = "sqlite:////data/mediabox.db"
+DATA_DIR = os.environ.get("MEDIABOX_DATA_DIR", "/data")
+DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'mediabox.db')}"
 engine = create_engine(DATABASE_URL, echo=False)
 
 

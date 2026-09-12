@@ -1,4 +1,4 @@
-"""Fetches XMLTV EPG, matches to our lineup channels, caches programmes for search."""
+"""Fetches XMLTV EPG, matches it to our lineup, caches programmes for search."""
 import asyncio
 import os
 import re
@@ -9,12 +9,14 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from app.m3u import get_cached_channels
+from app.m3u import get_cached_channels, identity_for
 
-EPG_URL = os.environ.get(
-    "EPG_URL",
-    "http://livego.club:8080/xmltv.php?username=qjdD0kuNEdBf&password=j17ceXEXeH5s",
-)
+# Comma-separated so a second provider can be added without a code change.
+EPG_URLS = [u.strip() for u in os.environ.get("EPG_URL", "").split(",") if u.strip()]
+
+# How far ahead to keep programmes. Providers publish only a few days; dnstream
+# gives about 3. This bounds memory as well as the watchlist's horizon.
+EPG_WINDOW_HOURS = int(os.environ.get("EPG_WINDOW_HOURS", "72"))
 
 # {channel_id: [{title, desc, start, stop}]}
 _epg_cache: Dict[str, List[Dict[str, Any]]] = {}
@@ -24,12 +26,12 @@ def get_epg_cache() -> Dict[str, List[Dict]]:
     return _epg_cache
 
 
+def epg_window_hours() -> int:
+    return EPG_WINDOW_HOURS
+
+
 def _normalize(s: str) -> str:
     return unicodedata.normalize('NFD', s.lower()).encode('ascii', 'ignore').decode()
-
-
-def _strip_quality(name: str) -> str:
-    return re.sub(r'\s+(FHD|HD|SD)$', '', name, flags=re.IGNORECASE).strip()
 
 
 def _parse_time(s: str) -> Optional[datetime]:
@@ -53,90 +55,107 @@ async def fetch_epg() -> None:
 
     channels = get_cached_channels()
     if not channels:
+        print("[epg] No channels in the lineup yet — skipping EPG fetch.")
+        return
+    if not EPG_URLS:
+        print("[epg] No EPG_URL configured — guide not built.")
         return
 
-    # Build lookup: normalized+quality-stripped name → channel_id
-    ch_lookup: Dict[str, str] = {}
-    for ch in channels:
-        key = _strip_quality(_normalize(ch['name']))
-        ch_lookup[key] = ch['id']
-
-    print(f"[epg] Fetching EPG for {len(ch_lookup)} channels…")
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(EPG_URL)
-            resp.raise_for_status()
-            xml_data = resp.content
-    except Exception as e:
-        print(f"[epg] Failed to fetch EPG: {e}")
-        return
-
-    print(f"[epg] Parsing {len(xml_data) // 1024}KB…")
-    try:
-        root = ET.fromstring(xml_data)
-    except Exception as e:
-        print(f"[epg] Failed to parse XML: {e}")
-        return
-
-    # Match EPG channel IDs → our channel IDs via display-name
-    epg_to_channel: Dict[str, str] = {}
-    for epg_ch in root.findall('channel'):
-        epg_id = epg_ch.get('id', '')
-        display = epg_ch.findtext('display-name', '')
-        key = _strip_quality(_normalize(display))
-        ch_id = ch_lookup.get(key)
-        if ch_id:
-            epg_to_channel[epg_id] = ch_id
-
-    print(f"[epg] Matched {len(epg_to_channel)} EPG channels to lineup")
-
+    known_ids = {ch['id'] for ch in channels}
     now = datetime.now(timezone.utc)
-    window_end = now + timedelta(hours=12)
+    window_end = now + timedelta(hours=EPG_WINDOW_HOURS)
     new_cache: Dict[str, List[Dict]] = {}
+    matched_total = 0
 
-    for p in root.findall('programme'):
-        ch_id = epg_to_channel.get(p.get('channel', ''))
-        if not ch_id:
+    for url in EPG_URLS:
+        host = re.sub(r"^https?://([^/:]+).*", r"\1", url)
+        print(f"[epg] Fetching guide from {host}…")
+        try:
+            async with httpx.AsyncClient(timeout=180, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                xml_data = resp.content
+        except Exception as e:
+            print(f"[epg] Failed to fetch guide from {host}: {e}")
             continue
 
-        start = _parse_time(p.get('start', ''))
-        stop = _parse_time(p.get('stop', ''))
-        if not start or not stop or stop < now or start > window_end:
+        print(f"[epg] Parsing {len(xml_data) // 1024}KB from {host}…")
+        try:
+            root = ET.fromstring(xml_data)
+        except Exception as e:
+            print(f"[epg] Failed to parse XML from {host}: {e}")
             continue
 
-        title = (p.findtext('title', '') or '').strip()
-        if not title or '<' in title:  # Skip malformed entries (some providers embed XML in titles)
-            continue
+        # Match EPG channels to ours using the same identity rule as the lineup.
+        epg_to_channel: Dict[str, str] = {}
+        for epg_ch in root.findall('channel'):
+            epg_id = epg_ch.get('id', '')
+            for display in epg_ch.findall('display-name'):
+                ch_id = identity_for((display.text or '').strip())
+                if ch_id and ch_id in known_ids:
+                    epg_to_channel[epg_id] = ch_id
+                    break
 
-        desc = (p.findtext('desc', '') or '').strip()[:200]
+        matched_total += len(epg_to_channel)
+        print(f"[epg] {host}: matched {len(epg_to_channel)} guide channels to the lineup")
 
-        new_cache.setdefault(ch_id, []).append({
-            'title': title,
-            'desc': desc,
-            'start': start.isoformat(),
-            'stop': stop.isoformat(),
-        })
+        for p in root.findall('programme'):
+            ch_id = epg_to_channel.get(p.get('channel', ''))
+            if not ch_id:
+                continue
+
+            start = _parse_time(p.get('start', ''))
+            stop = _parse_time(p.get('stop', ''))
+            if not start or not stop or stop < now or start > window_end:
+                continue
+
+            title = (p.findtext('title', '') or '').strip()
+            if not title or '<' in title:  # some providers embed XML in titles
+                continue
+
+            new_cache.setdefault(ch_id, []).append({
+                'title': title,
+                'desc': (p.findtext('desc', '') or '').strip()[:300],
+                'start': start.isoformat(),
+                'stop': stop.isoformat(),
+            })
+
+    if not new_cache:
+        print("[epg] Nothing parsed — keeping the previous guide.")
+        return
 
     for progs in new_cache.values():
         progs.sort(key=lambda x: x['start'])
 
     _epg_cache = new_cache
     total = sum(len(v) for v in new_cache.values())
-    print(f"[epg] Cached {total} programmes for {len(new_cache)} channels.")
+    print(f"[epg] Cached {total} programmes for {len(new_cache)} channels "
+          f"({EPG_WINDOW_HOURS}h window, {matched_total} matched).")
 
 
 async def epg_refresh_loop() -> None:
+    """Refresh every 6 hours. The guide only extends a few days and the files are
+    large (60MB+), so there is nothing to gain from fetching more often."""
     while True:
-        await asyncio.sleep(3600)  # Refresh every hour
+        await asyncio.sleep(21600)  # 6 hours
         await fetch_epg()
 
 
-def search_epg(query: str, channels_by_id: Dict[str, Dict]) -> List[Dict]:
-    """Search programme titles/descriptions. Returns matches with channel info, sorted live-first."""
+def _matches(terms: List[str], *fields: str) -> bool:
+    """Every term must appear somewhere in the supplied fields."""
+    haystack = _normalize(" ".join(f for f in fields if f))
+    return all(t in haystack for t in terms)
+
+
+def search_epg(query: str, channels_by_id: Dict[str, Dict], limit: int = 200) -> List[Dict]:
+    """Search programme titles/descriptions. Returns matches sorted live-first."""
     if len(query) < 2:
         return []
 
-    q = _normalize(query)
+    terms = [t for t in _normalize(query).split() if t]
+    if not terms:
+        return []
+
     now = datetime.now(timezone.utc)
     results = []
 
@@ -146,7 +165,7 @@ def search_epg(query: str, channels_by_id: Dict[str, Dict]) -> List[Dict]:
             continue
 
         for prog in programmes:
-            if q not in _normalize(prog['title']) and q not in _normalize(prog.get('desc', '')):
+            if not _matches(terms, prog['title'], prog.get('desc', '')):
                 continue
 
             start = datetime.fromisoformat(prog['start'])
@@ -157,12 +176,14 @@ def search_epg(query: str, channels_by_id: Dict[str, Dict]) -> List[Dict]:
             results.append({
                 'channel_id': ch_id,
                 'channel_name': ch['name'],
+                'group': ch.get('group', ''),
                 'title': prog['title'],
+                'desc': prog.get('desc', ''),
                 'start': prog['start'],
                 'stop': prog['stop'],
                 'live': is_live,
                 'minutes_until': minutes_until if not is_live else 0,
             })
 
-    results.sort(key=lambda r: (not r['live'], r['minutes_until']))
-    return results
+    results.sort(key=lambda r: (not r['live'], r['start']))
+    return results[:limit]

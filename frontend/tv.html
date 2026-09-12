@@ -813,6 +813,59 @@
       .sidebar-label { display: none; }
       .sidebar-div { display: none; }
     }
+  
+    /* ── Watchlist / schedule ─────────────────────────────────────────────── */
+    .sched-head { padding: 4px 0 14px; }
+    .sched-title { font-size: 18px; font-weight: 650; margin-bottom: 4px; }
+    .sched-sub { font-size: 12px; color: var(--muted); }
+    .sched-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+    .sched-chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 999px; padding: 6px 10px 6px 13px; font-size: 13px;
+    }
+    .sched-chip button {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 15px; line-height: 1; padding: 0 2px;
+    }
+    .sched-chip button:hover { color: var(--accent); }
+    .sched-add {
+      background: var(--bg); border: 1px dashed var(--border); border-radius: 999px;
+      padding: 6px 14px; color: var(--muted); font-size: 13px; min-width: 190px;
+    }
+    .sched-add:focus { outline: none; border-color: var(--accent); color: inherit; }
+    .sched-day {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--muted); margin: 22px 0 8px; font-weight: 600;
+    }
+    .sched-row {
+      display: flex; align-items: center; gap: 13px; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px;
+      cursor: pointer; background: var(--surface);
+    }
+    .sched-row:hover { border-color: var(--accent); }
+    .sched-time {
+      font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600;
+      min-width: 46px; color: var(--muted);
+    }
+    .sched-time.live { color: #e5484d; }
+    .sched-main { flex: 1; min-width: 0; }
+    .sched-name { font-size: 14px; margin-bottom: 2px; }
+    .sched-meta {
+      font-size: 11px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sched-kw {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+      padding: 2px 6px; color: var(--muted); flex-shrink: 0;
+    }
+    .sched-addbtn {
+      background: none; border: 1px solid var(--border); border-radius: 7px;
+      padding: 5px 11px; color: var(--muted); cursor: pointer; font-size: 12px;
+      flex-shrink: 0;
+    }
+    .sched-addbtn:hover { border-color: var(--accent); color: var(--accent); }
   </style>
 </head>
 <body>
@@ -869,6 +922,11 @@
     <div class="group-item" data-group="recent" onclick="setGroup('recent', this)">
       <span class="group-flag">🕐</span>
       <span class="group-name">Recently Watched</span>
+    </div>
+    <div class="group-item" data-group="schedule" onclick="setGroup('schedule', this)">
+      <span class="group-flag">🔔</span>
+      <span class="group-name">My Schedule</span>
+      <span class="group-count" id="schedCount"></span>
     </div>
     <div class="sidebar-div"></div>
     <div class="sidebar-label">Groups</div>
@@ -1110,6 +1168,8 @@ function setGroup(groupId, el) {
 // ── Channel list ──────────────────────────────────────────────────────────────
 function renderChannels() {
   const list = document.getElementById('channelList');
+
+  if (activeGroup === 'schedule') { renderSchedule(); return; }
 
   let displayGroups;
 
@@ -1864,6 +1924,145 @@ async function submitAddChannel() {
   }
 }
 
+
+// ── Watchlist / schedule ──────────────────────────────────────────────────────
+let watchKeywords = [];
+
+function schedDayLabel(d) {
+  const today = new Date(); const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return 'Today';
+  if (same(d, tomorrow)) return 'Tomorrow';
+  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
+}
+
+async function renderSchedule() {
+  const list = document.getElementById('channelList');
+  list.innerHTML = '<div class="empty-state"><div>Building your schedule…</div></div>';
+
+  let data = { programmes: [], events: [], window_hours: 72 };
+  try {
+    const [wl, sched] = await Promise.all([
+      fetch('/api/watchlist').then(r => r.json()),
+      fetch('/api/schedule').then(r => r.json()),
+    ]);
+    watchKeywords = wl;
+    data = sched;
+  } catch (_) {
+    list.innerHTML = '<div class="empty-state"><div>Could not load the schedule.</div></div>';
+    return;
+  }
+
+  const chips = watchKeywords.map(k => `
+    <span class="sched-chip">${escHtml(k.keyword)}
+      <button title="Remove" onclick="removeKeyword(${k.id})">&times;</button>
+    </span>`).join('');
+
+  let html = `
+    <div class="sched-head">
+      <div class="sched-title">My Schedule</div>
+      <div class="sched-sub">Anything matching your keywords in the next ${data.window_hours} hours.</div>
+      <div class="sched-chips">
+        ${chips}
+        <input class="sched-add" id="schedAddInput" placeholder="+ add keyword, e.g. Liverpool"
+               onkeydown="if(event.key==='Enter'){addKeyword(this.value);this.value='';}">
+      </div>
+    </div>`;
+
+  if (!watchKeywords.length) {
+    html += `<div class="empty-state"><div class="empty-state-icon">🔔</div>
+      <div>No keywords yet</div>
+      <div class="empty-state-hint">Add a team, tournament or player above and anything matching
+      will show up here with the channel it is on.</div></div>`;
+    list.innerHTML = html;
+    return;
+  }
+
+  // Guide entries, grouped by local day
+  let lastDay = '';
+  if (data.programmes.length) {
+    for (const p of data.programmes) {
+      const start = new Date(p.start);
+      const day = schedDayLabel(start);
+      if (day !== lastDay) { html += `<div class="sched-day">${escHtml(day)}</div>`; lastDay = day; }
+      const time = p.live ? 'LIVE' : start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      html += `
+        <div class="sched-row" onclick="playChannel('${escHtml(p.channel_id)}')">
+          <span class="sched-time ${p.live ? 'live' : ''}">${escHtml(time)}</span>
+          <div class="sched-main">
+            <div class="sched-name">${escHtml(p.title)}</div>
+            <div class="sched-meta">${escHtml(p.channel_name)}${p.desc ? ' · ' + escHtml(p.desc.slice(0, 90)) : ''}</div>
+          </div>
+          <span class="sched-kw">${escHtml(p.keyword)}</span>
+        </div>`;
+    }
+  }
+
+  // Event/PPV channels — these carry the fixture in the channel name itself
+  if (data.events.length) {
+    html += `<div class="sched-day">Event channels (${data.events.length})</div>`;
+    for (const e of data.events.slice(0, 40)) {
+      html += `
+        <div class="sched-row">
+          <span class="sched-time">${escHtml(e.listed_time ? e.listed_time.slice(11, 16) : '—')}</span>
+          <div class="sched-main">
+            <div class="sched-name">${escHtml(e.name)}</div>
+            <div class="sched-meta">${escHtml(e.group || '')}</div>
+          </div>
+          <span class="sched-kw">${escHtml(e.keyword)}</span>
+          <button class="sched-addbtn"
+                  onclick="addEventChannel(this, '${escHtml(e.name).replace(/'/g, "\\'")}', '${escHtml(e.url)}')">Add</button>
+        </div>`;
+    }
+  }
+
+  if (!data.programmes.length && !data.events.length) {
+    html += `<div class="empty-state"><div class="empty-state-icon">🔍</div>
+      <div>Nothing matching in the next ${data.window_hours} hours</div>
+      <div class="empty-state-hint">The guide only reaches a few days ahead — check back closer to the day.</div></div>`;
+  }
+
+  list.innerHTML = html;
+  const badge = document.getElementById('schedCount');
+  if (badge) badge.textContent = data.programmes.length || '';
+}
+
+async function addKeyword(kw) {
+  kw = (kw || '').trim();
+  if (kw.length < 2) return;
+  try {
+    await fetch(`/api/watchlist?keyword=${encodeURIComponent(kw)}`, { method: 'POST' });
+    renderSchedule();
+  } catch (_) { alert('Could not add that keyword.'); }
+}
+
+async function removeKeyword(id) {
+  try {
+    await fetch(`/api/watchlist/${id}`, { method: 'DELETE' });
+    renderSchedule();
+  } catch (_) {}
+}
+
+async function addEventChannel(btn, name, url) {
+  btn.disabled = true; btn.textContent = 'Adding…';
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('url', url);
+  try {
+    const resp = await fetch('/api/custom-channels', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error();
+    const ch = await resp.json();
+    customChannels.push(ch);
+    mergeCustomChannels();
+    allChannels = groups.flatMap(g => g.channels.map(c => ({...c, groupId: g.id, groupName: g.name, groupFlag: g.flag})));
+    renderGroupList();
+    btn.textContent = 'Added ✓';
+  } catch (_) {
+    btn.disabled = false; btn.textContent = 'Add';
+    alert('Could not add that channel.');
+  }
+}
+
 // ── Admin Settings ────────────────────────────────────────────────────────────
 
 async function openSettings() {
@@ -1921,7 +2120,7 @@ async function createUser() {
     <div class="new-user-creds">
       <strong>${escHtml(user.username)}</strong> — password: <strong>${escHtml(user.password)}</strong>
     </div>
-    <button class="copy-btn" onclick="navigator.clipboard.writeText('Username: ${escHtml(user.username)}\\nPassword: ${escHtml(user.password)}\\nURL: https://pulse.tailbdcf8b.ts.net:8443')">
+    <button class="copy-btn" onclick="navigator.clipboard.writeText('Username: ${escHtml(user.username)}\\nPassword: ${escHtml(user.password)}\\nURL: https://pulse.tail7db12d.ts.net:8443')">
       Copy login details
     </button>
   `;

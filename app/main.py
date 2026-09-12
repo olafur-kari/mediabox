@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import secrets
 import string
 import time
@@ -23,22 +24,35 @@ from app.auth import (
     hash_password,
     verify_password,
 )
-from app.epg import fetch_epg, epg_refresh_loop, search_epg
+from app.epg import fetch_epg, epg_refresh_loop, search_epg, epg_window_hours
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
-from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User
+from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, User, WatchKeyword
 from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
 
-DATABASE_URL = "sqlite:////data/mediabox.db"
+# Container default; override for a local run (see run-local.sh)
+DATA_DIR = os.environ.get("MEDIABOX_DATA_DIR", "/data")
+DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'mediabox.db')}"
 engine = create_engine(DATABASE_URL, echo=False)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
 # ── Stream concurrency limit ───────────────────────────────────────────────────
-STREAM_LIMIT = int(os.environ.get("STREAM_LIMIT", "2"))
+# Distinct channels that may be open at once. Threadfin buffering means any
+# number of people can share one channel, so this counts channels, not viewers.
+STREAM_LIMIT = int(os.environ.get("STREAM_LIMIT", "1"))
 HEARTBEAT_TIMEOUT = 20  # seconds — session expires if no heartbeat received
 
-# user_id → last heartbeat timestamp
-_active_sessions: dict[int, float] = {}
+# user_id → {"ts": last heartbeat, "channel_id": str|None, "channel_name": str}
+_active_sessions: dict[int, dict] = {}
+
+
+def _channels_in_use(exclude_user: int | None = None) -> dict:
+    """Distinct channels currently open, as {channel_id: channel_name}."""
+    return {
+        s["channel_id"]: s["channel_name"]
+        for uid, s in _active_sessions.items()
+        if s.get("channel_id") and uid != exclude_user
+    }
 
 
 async def _session_expiry_loop():
@@ -46,7 +60,7 @@ async def _session_expiry_loop():
     while True:
         await asyncio.sleep(5)
         cutoff = time.monotonic() - HEARTBEAT_TIMEOUT
-        expired = [uid for uid, ts in _active_sessions.items() if ts < cutoff]
+        expired = [uid for uid, s in _active_sessions.items() if s["ts"] < cutoff]
         for uid in expired:
             _active_sessions.pop(uid, None)
         if expired:
@@ -56,6 +70,28 @@ async def _session_expiry_loop():
 def get_session():
     with Session(engine) as session:
         yield session
+
+
+async def _lineup_loop():
+    """Load the Threadfin lineup, retrying until it answers, then refresh hourly.
+
+    The EPG is built here too, because matching guide entries to channels requires
+    a lineup to match against.
+    """
+    delay = 5
+    while True:
+        await fetch_channels()
+        if get_cached_channels():
+            break
+        print(f"[m3u] Lineup empty — retrying in {delay}s (Threadfin may still be starting)")
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 60)
+
+    await fetch_epg()
+
+    while True:
+        await asyncio.sleep(3600)
+        await fetch_channels()
 
 
 @asynccontextmanager
@@ -70,13 +106,13 @@ async def lifespan(app: FastAPI):
                 conn.commit()
             except Exception:
                 pass  # Column already exists
-    # Fetch channels from Threadfin
-    await fetch_channels()
+    # Threadfin needs ~25s to load its playlist after a restart and both containers
+    # start together, so the first attempt usually loses the race. Retry instead of
+    # coming up with a permanently empty channel list.
+    asyncio.create_task(_lineup_loop())
     # Fetch full provider channel list in background (non-blocking)
     asyncio.create_task(fetch_provider_channels(engine))
     asyncio.create_task(provider_refresh_loop(engine))
-    # Fetch EPG programme data in background
-    asyncio.create_task(fetch_epg())
     asyncio.create_task(epg_refresh_loop())
     # Expire stale stream sessions
     asyncio.create_task(_session_expiry_loop())
@@ -176,7 +212,7 @@ def _pick_best_url(streams: list) -> str:
 
 def _resolve_threadfin_url(url: str) -> str:
     """Replace localhost with the Threadfin host so the server can reach it."""
-    threadfin_url = os.environ.get("THREADFIN_URL", "http://100.104.189.115:34400")
+    threadfin_url = os.environ.get("THREADFIN_URL", "http://100.113.186.78:34400")
     return url.replace("http://localhost:34400", threadfin_url)
 
 
@@ -197,36 +233,62 @@ async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = 
 
 @app.get("/api/active-users")
 async def api_active_users(current_user: dict = Depends(get_current_user)):
-    return {"count": len(_active_sessions), "limit": STREAM_LIMIT}
+    in_use = _channels_in_use()
+    return {
+        "count": len(in_use),
+        "viewers": len(_active_sessions),
+        "limit": STREAM_LIMIT,
+        "channels": sorted(set(in_use.values())),
+    }
 
 
 @app.post("/api/stream/start")
-async def api_stream_start(current_user: dict = Depends(get_current_user)):
-    """Register a stream session. Admins bypass the limit."""
+async def api_stream_start(
+    channel_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Claim a viewing slot.
+
+    The subscription limits *provider connections*, not viewers. Threadfin buffers a
+    channel once and fans it out, so everyone watching the same channel costs one
+    connection — the limit therefore counts distinct channels. Admins bypass it.
+    """
     user_id = current_user["user_id"]
     is_admin = current_user.get("is_admin", False)
 
-    # Already has an active session — just refresh it
-    if user_id in _active_sessions:
-        _active_sessions[user_id] = time.monotonic()
-        return {"ok": True, "active": len(_active_sessions), "limit": STREAM_LIMIT}
+    ch = get_channel_by_id(channel_id) if channel_id else None
+    channel_name = ch["name"] if ch else "óþekkt rás"
 
-    if not is_admin and len(_active_sessions) >= STREAM_LIMIT:
+    # What everyone *else* has open. Switching channels frees the one we were on.
+    others = _channels_in_use(exclude_user=user_id)
+
+    if channel_id not in others and len(others) >= STREAM_LIMIT and not is_admin:
+        in_use = ", ".join(sorted(set(others.values())))
+        plural = "" if STREAM_LIMIT == 1 else "s"
         raise HTTPException(
             status_code=409,
-            detail=f"All {STREAM_LIMIT} streams are currently in use. Try again later.",
+            detail=(
+                f"Already watching: {in_use}. This subscription allows {STREAM_LIMIT} "
+                f"channel{plural} at a time — switch to that channel to watch along, "
+                f"or wait until it is free."
+            ),
         )
 
-    _active_sessions[user_id] = time.monotonic()
-    print(f"[streams] Session started for user {user_id} ({len(_active_sessions)}/{STREAM_LIMIT} active)")
-    return {"ok": True, "active": len(_active_sessions), "limit": STREAM_LIMIT}
+    _active_sessions[user_id] = {
+        "ts": time.monotonic(),
+        "channel_id": channel_id,
+        "channel_name": channel_name,
+    }
+    in_use_now = _channels_in_use()
+    print(f"[streams] user {user_id} → {channel_name} ({len(in_use_now)}/{STREAM_LIMIT} channels open)")
+    return {"ok": True, "active": len(in_use_now), "limit": STREAM_LIMIT}
 
 
 @app.post("/api/stream/heartbeat")
 async def api_stream_heartbeat(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     if user_id in _active_sessions:
-        _active_sessions[user_id] = time.monotonic()
+        _active_sessions[user_id]["ts"] = time.monotonic()
     return {"ok": True}
 
 
@@ -234,7 +296,7 @@ async def api_stream_heartbeat(current_user: dict = Depends(get_current_user)):
 async def api_stream_stop(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     _active_sessions.pop(user_id, None)
-    print(f"[streams] Session ended for user {user_id} ({len(_active_sessions)}/{STREAM_LIMIT} active)")
+    print(f"[streams] user {user_id} stopped ({len(_channels_in_use())}/{STREAM_LIMIT} channels open)")
     return {"ok": True}
 
 
@@ -432,6 +494,121 @@ async def api_provider_search(
     if len(q) < 2:
         return []
     return search_provider_channels(engine, q)
+
+
+# ── Watchlist / Schedule API ──────────────────────────────────────────────────
+
+# Event channels carry their kick-off in the name: "... (2026-09-12 23:50:34)"
+_EVENT_TIME_RE = re.compile(r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)\)")
+
+
+@app.get("/api/watchlist")
+async def api_get_watchlist(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    rows = session.exec(
+        select(WatchKeyword).where(WatchKeyword.user_id == current_user["user_id"])
+    ).all()
+    return [{"id": r.id, "keyword": r.keyword} for r in rows]
+
+
+@app.post("/api/watchlist")
+async def api_add_watchlist(
+    keyword: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    keyword = keyword.strip()
+    if len(keyword) < 2:
+        raise HTTPException(status_code=400, detail="Keyword must be at least 2 characters.")
+    user_id = current_user["user_id"]
+    existing = session.exec(
+        select(WatchKeyword).where(
+            WatchKeyword.user_id == user_id,
+            WatchKeyword.keyword == keyword,
+        )
+    ).first()
+    if existing:
+        return {"id": existing.id, "keyword": existing.keyword}
+    row = WatchKeyword(user_id=user_id, keyword=keyword)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id, "keyword": row.keyword}
+
+
+@app.delete("/api/watchlist/{keyword_id}")
+async def api_delete_watchlist(
+    keyword_id: int,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    row = session.get(WatchKeyword, keyword_id)
+    if not row or row.user_id != current_user["user_id"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/api/schedule")
+async def api_schedule(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_session),
+    q: Optional[str] = None,
+):
+    """What's coming up for the saved keywords (or a one-off `q`).
+
+    Two sources, because fixtures live in two places: the TV guide, which has proper
+    start times, and event/PPV channel names, which spell the fixture out but only
+    sometimes carry a time.
+    """
+    if q:
+        keywords = [q.strip()]
+    else:
+        keywords = [
+            r.keyword for r in session.exec(
+                select(WatchKeyword).where(WatchKeyword.user_id == current_user["user_id"])
+            ).all()
+        ]
+
+    channels_by_id = {ch["id"]: ch for ch in get_cached_channels()}
+    programmes: list[dict] = []
+    events: list[dict] = []
+    seen_prog: set = set()
+    seen_event: set = set()
+
+    for kw in keywords:
+        for hit in search_epg(kw, channels_by_id, limit=100):
+            key = (hit["channel_id"], hit["start"], hit["title"])
+            if key in seen_prog:
+                continue
+            seen_prog.add(key)
+            programmes.append({**hit, "keyword": kw})
+
+        for ch in search_provider_channels(engine, kw, limit=40):
+            if ch["name"] in seen_event:
+                continue
+            seen_event.add(ch["name"])
+            m = _EVENT_TIME_RE.search(ch["name"])
+            events.append({
+                "keyword": kw,
+                "name": ch["name"],
+                "group": ch["group"],
+                "url": ch["url"],
+                "listed_time": m.group(1) if m else None,
+            })
+
+    programmes.sort(key=lambda x: x["start"])
+    events.sort(key=lambda x: (x["listed_time"] is None, x["listed_time"] or "", x["name"]))
+
+    return {
+        "window_hours": epg_window_hours(),
+        "keywords": keywords,
+        "programmes": programmes,
+        "events": events,
+    }
 
 
 # ── Admin API ─────────────────────────────────────────────────────────────────
