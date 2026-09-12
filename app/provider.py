@@ -171,6 +171,30 @@ async def provider_refresh_loop(engine):
         await fetch_provider_channels(engine)
 
 
+# Event channels carry their kick-off in the name: "... (2026-09-12 23:50:34)"
+_EVENT_TIME = re.compile(r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2})(?::\d{2})?\)")
+
+
+def _event_rank(name: str):
+    """Sort key: live or upcoming first, undated next, finished last.
+
+    Names carry a kick-off time, so a search for a team should surface tonight's
+    fixture rather than a replay from last season.
+    """
+    from datetime import datetime, timedelta
+    m = _EVENT_TIME.search(name)
+    if not m:
+        return (1, "")           # undated — could be a 24/7 channel, keep in the middle
+    try:
+        when = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+    except ValueError:
+        return (1, "")
+    now = datetime.utcnow()
+    if when < now - timedelta(hours=3):
+        return (2, m.group(1))   # already finished
+    return (0, m.group(1))       # live or upcoming, soonest first
+
+
 def search_provider_channels(engine, query: str, limit: int = 50):
     """Search provider channels by normalized name (accent-insensitive).
 
@@ -184,8 +208,10 @@ def search_provider_channels(engine, query: str, limit: int = 50):
         stmt = select(ProviderChannel)
         for t in terms:
             stmt = stmt.where(ProviderChannel.name_normalized.ilike(f"%{t}%"))
-        results = session.exec(stmt.limit(limit)).all()
-    return [
+        results = session.exec(stmt.limit(limit * 4)).all()
+    rows = [
         {"id": r.id, "name": r.name, "group": r.group, "url": r.url}
         for r in results
     ]
+    rows.sort(key=lambda r: _event_rank(r["name"]))
+    return rows[:limit]

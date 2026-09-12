@@ -1760,11 +1760,16 @@ async function renderDropdown() {
   searchDropdown.innerHTML = html || `<div class="search-no-results">Searching…</div>`;
   searchDropdown.classList.add('open');
 
-  // Fetch EPG results in parallel
+  // Guide and provider catalogue in parallel.
+  // The provider search runs ALWAYS, not just as a fallback: live fixtures live on
+  // event/PPV channels that are not in the lineup, so gating them behind "nothing
+  // else matched" hid the actual match whenever a loosely-named channel matched first.
   try {
-    const resp = await fetch(`/api/epg/search?q=${encodeURIComponent(rawQ)}`);
+    const [epgResults, providerResults] = await Promise.all([
+      fetch(`/api/epg/search?q=${encodeURIComponent(rawQ)}`).then(r => r.json()).catch(() => []),
+      fetch(`/api/provider-search?q=${encodeURIComponent(rawQ)}`).then(r => r.json()).catch(() => []),
+    ]);
     if (searchInput.value.trim() !== rawQ) return; // Query changed while fetching
-    const epgResults = await resp.json();
 
     let newHtml = '';
     if (chResults.length) {
@@ -1775,20 +1780,49 @@ async function renderDropdown() {
       newHtml += `<div class="search-results-label">On Now &amp; Coming Up</div>`;
       newHtml += epgResults.slice(0, 8).map(r => renderEpgResult(r, q)).join('');
     }
-    if (!chResults.length && !epgResults.length) {
-      newHtml = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
-      searchProviderChannels(rawQ);
+    if (providerResults.length) {
+      newHtml += `<div class="search-results-label">Events &amp; PPV — not in your lineup</div>`;
+      newHtml += providerResults.slice(0, 10).map(ch => renderProviderResult(ch, q)).join('');
+    }
+    if (!chResults.length && !epgResults.length && !providerResults.length) {
+      newHtml = `<div class="search-no-results">No results for "<strong>${escHtml(rawQ)}</strong>"</div>`;
     }
     newHtml += renderCustomSection(rawQ, q);
     searchDropdown.innerHTML = newHtml;
     searchDropdown.classList.add('open');
   } catch (_) {
-    // EPG unavailable — still show channel results
-    if (!chResults.length) {
-      searchDropdown.innerHTML = `<div class="search-no-results">Not in your lineup — searching provider…</div>`;
-      searchProviderChannels(rawQ);
+    // Leave the channel results already on screen
+  }
+}
+
+
+function renderProviderResult(ch, q) {
+  // Event channels carry the fixture and kick-off in the name itself
+  const timeMatch = ch.name.match(/\((\d{4}-\d{2}-\d{2} \d{2}:\d{2})(?::\d{2})?\)/);
+  let when = '';
+  if (timeMatch) {
+    const d = new Date(timeMatch[1].replace(' ', 'T') + 'Z');
+    if (!isNaN(d)) {
+      const mins = Math.round((d - new Date()) / 60000);
+      when = mins < -150 ? 'ended'
+           : mins <= 0 ? '● LIVE'
+           : mins < 60 ? `in ${mins}min`
+           : d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
     }
   }
+  const clean = ch.name.replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '');
+  return `
+    <div class="search-item provider-result">
+      <div class="search-item-logo">${escHtml(clean.slice(0, 4).toUpperCase())}</div>
+      <div class="search-item-info">
+        <div class="search-item-name">${hl(clean, q)}</div>
+        <div class="search-item-meta">${escHtml(ch.group || '')}</div>
+      </div>
+      <div class="search-item-right">
+        ${when ? `<span class="epg-time ${when === '● LIVE' ? 'live' : ''}">${escHtml(when)}</span>` : ''}
+        <button class="search-add-btn-inline" onclick="addProviderChannel(${ch.id}, '${escHtml(ch.name).replace(/'/g, "\\'")}', '${escHtml(ch.url)}')">+ Add</button>
+      </div>
+    </div>`;
 }
 
 function renderCustomSection(rawQ, q) {
