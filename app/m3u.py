@@ -43,7 +43,7 @@ _COUNTRY_ALIASES = {
 
 # Groups that are not countries. The provider files its 4K feeds under a "|4K|"
 # name prefix rather than a country tag, so they need a home of their own.
-SPECIAL_GROUPS = {"4K": "4K / UHD"}
+SPECIAL_GROUPS = {"4K": "4K / UHD", "F1": "Formúla 1"}
 
 # Codes to drop even though they look like one of ours.
 # dnstream uses "IS" for Israel, which collides with our IS = Ísland.
@@ -118,7 +118,7 @@ def _split_country(guide_name: str):
     for pattern in (
         r'^\|([A-Za-z0-9]{2,4})\|\s*(.+)$',     # |4K| NAME
         r'^\[([A-Za-z]{2,4})\]\s*(.+)$',        # [NO] NAME
-        r'^([A-Za-z]{2,4})\s*[:\-]\s*(.+)$',     # UK - NAME / IS: NAME
+        r'^([A-Za-z][A-Za-z0-9]{1,3})\s*[:\-]\s*(.+)$',  # UK - NAME / IS: NAME / F1 - NAME
     ):
         m = re.match(pattern, guide_name)
         if m:
@@ -180,6 +180,7 @@ def _load_groups_config() -> Dict:
 
 _FLAG_MAP = {
     "4K / UHD": "🎞️",
+    "Formúla 1": "🏎️",
     "Ísland": "🇮🇸",
     "Noregur": "🇳🇴",
     "Svíþjóð": "🇸🇪",
