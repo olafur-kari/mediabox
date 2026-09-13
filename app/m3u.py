@@ -41,6 +41,10 @@ _COUNTRY_ALIASES = {
     "GRE": "GR", "AUS": "AU", "CAN": "CA", "UKI": "UK", "FRA": "FR",
 }
 
+# Groups that are not countries. The provider files its 4K feeds under a "|4K|"
+# name prefix rather than a country tag, so they need a home of their own.
+SPECIAL_GROUPS = {"4K": "4K / UHD"}
+
 # Codes to drop even though they look like one of ours.
 # dnstream uses "IS" for Israel, which collides with our IS = Ísland.
 # Empty this set when an Icelandic source is added, so IS means Ísland again.
@@ -51,6 +55,11 @@ EXCLUDED_COUNTRY_CODES = {"IS"}
 # StreamQuality when it has been measured.
 _QUALITY_RE = re.compile(r"\b(4K|UHD|FHD|HD|SD)\b(?:\s+P\d+)?\s*$", re.IGNORECASE)
 _QUALITY_RANK = {"4K": 4, "UHD": 4, "FHD": 3, "HD": 2, "SD": 1}
+
+# Ceiling for automatic selection. 4K feeds on this provider run ~36 Mbps (16 GB/h)
+# and are HEVC, which most browsers cannot decode — so they stay available to pick
+# by hand but never get chosen for you. Raise via MAX_AUTO_HEIGHT to allow 2160.
+MAX_AUTO_HEIGHT = int(os.environ.get("MAX_AUTO_HEIGHT", "1080"))
 
 
 def _quality_tag(name: str) -> str:
@@ -102,17 +111,20 @@ def _channel_id(country_code: str, name: str) -> str:
 
 
 def _split_country(guide_name: str):
-    """Split "UK - BBC 1 FHD" / "IS: RÚV" / "[NO] NRK1" into (code, rest).
+    """Split "UK - BBC 1 FHD" / "IS: RÚV" / "[NO] NRK1" / "|4K| SKY SPORTS 1" into (code, rest).
 
-    Returns (None, name) when there is no recognisable country tag.
+    Returns (None, name) when there is no recognisable tag.
     """
-    m = re.match(r'^\[([A-Za-z]{2,4})\]\s*(.+)$', guide_name)
-    if not m:
-        m = re.match(r'^([A-Za-z]{2,4})\s*[:\-]\s*(.+)$', guide_name)
-    if not m:
-        return None, guide_name.strip()
-    code = m.group(1).upper()
-    return _COUNTRY_ALIASES.get(code, code), m.group(2).strip()
+    for pattern in (
+        r'^\|([A-Za-z0-9]{2,4})\|\s*(.+)$',     # |4K| NAME
+        r'^\[([A-Za-z]{2,4})\]\s*(.+)$',        # [NO] NAME
+        r'^([A-Za-z]{2,4})\s*[:\-]\s*(.+)$',     # UK - NAME / IS: NAME
+    ):
+        m = re.match(pattern, guide_name)
+        if m:
+            code = m.group(1).upper()
+            return _COUNTRY_ALIASES.get(code, code), m.group(2).strip()
+    return None, guide_name.strip()
 
 
 def _display_name(name: str) -> str:
@@ -137,7 +149,9 @@ def identity_for(guide_name: str) -> Optional[str]:
     if not guide_name or _SEPARATOR_RE.match(guide_name):
         return None
     code, rest = _split_country(guide_name)
-    if not code or code in EXCLUDED_COUNTRY_CODES or code not in COUNTRY_NAMES:
+    if not code or code in EXCLUDED_COUNTRY_CODES:
+        return None
+    if code not in COUNTRY_NAMES and code not in SPECIAL_GROUPS:
         return None
     return _channel_id(code, rest)
 
@@ -165,6 +179,7 @@ def _load_groups_config() -> Dict:
 
 
 _FLAG_MAP = {
+    "4K / UHD": "🎞️",
     "Ísland": "🇮🇸",
     "Noregur": "🇳🇴",
     "Svíþjóð": "🇸🇪",
@@ -201,7 +216,13 @@ def _rank_streams(streams: List[Dict], quality_map: Dict[str, Dict]) -> List[Dic
         s["width"] = measured.get("width", 0)
         s["codec"] = measured.get("codec", "")
 
-    streams.sort(key=lambda s: (-s["height"], -_QUALITY_RANK.get(s["quality"], 0)))
+    # Best stream at or below the ceiling first; anything above it sorts after, so it
+    # stays selectable but is never the default.
+    streams.sort(key=lambda s: (
+        1 if s["height"] > MAX_AUTO_HEIGHT else 0,
+        -s["height"] if s["height"] <= MAX_AUTO_HEIGHT else s["height"],
+        -_QUALITY_RANK.get(s["quality"], 0),
+    ))
 
     for i, s in enumerate(streams):
         if s["height"]:
@@ -253,7 +274,7 @@ async def fetch_channels(quality_map: Optional[Dict[str, Dict]] = None) -> List[
         if code in EXCLUDED_COUNTRY_CODES:
             skipped_excluded += 1
             continue
-        group = COUNTRY_NAMES.get(code) if code else None
+        group = (COUNTRY_NAMES.get(code) or SPECIAL_GROUPS.get(code)) if code else None
         if group is None:
             skipped_no_country += 1
             continue

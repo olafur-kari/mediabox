@@ -341,7 +341,11 @@ async def proxy_stream(request: Request, channel_id: str, stream_idx: int = 0, m
         url = _resolve_threadfin_url(streams[stream_idx]["url"])
 
     async def stream_generator():
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        # A live stream has no natural end, so a read timeout is wrong: a 10s gap in
+        # upstream data was killing playback mid-match and leaking a Threadfin tuner
+        # each time ("No more streams available"). Connect fast, then read forever.
+        limits = httpx.Timeout(connect=15.0, read=None, write=15.0, pool=15.0)
+        async with httpx.AsyncClient(timeout=limits, follow_redirects=True) as client:
             async with client.stream("GET", url) as resp:
                 async for chunk in resp.aiter_bytes(chunk_size=65536):
                     if await request.is_disconnected():
