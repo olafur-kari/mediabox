@@ -1036,12 +1036,22 @@ let currentChannelId = null;
 let activeStreamIdx = 0;
 let searchFocusIdx = -1;
 let hlsInstance = null;
-// Quiet reconnects after a playback error, before the error screen is shown.
-const MAX_AUTO_RETRIES = 3;
+// Playback sits behind live on purpose. The provider sends ~27s of back-buffer on
+// every connect; playing from the start of it instead of the live edge leaves a
+// cushion that absorbs provider stalls (2-12s gaps measured) without a stutter.
+const START_CUSHION_S = 20;      // wait for this much buffered video before playing
+const START_WAIT_MAX_MS = 8000;  // …but never longer than this
+const STALL_RECONNECT_S = 10;    // picture frozen this long while playing → reconnect
+const GIVE_UP_AFTER_MS = 60000;  // keep reconnecting quietly for this long
 let _retryCount = 0;
 let _retryTimer = null;
 let _retryResetTimer = null;
+let _watchdogTimer = null;
+let _failingSince = null;        // first failure since playback was last healthy
+let _resumeBehind = null;        // seconds behind live when the stream dropped
+let _failedAt = 0;
 let _playToken = 0;              // bumps on every start, so a stale retry can't fire
+let _retryTimerToken = null;     // the attempt that already has a reconnect queued
 
 // ── Congestion detection state ────────────────────────────────────────────────
 let _stallTimestamps = [];       // rolling window of stall event times
@@ -1393,7 +1403,48 @@ async function loadStream(channelId, streamIdx) {
   }
 
   _retryCount = 0;
+  _failingSince = null;
+  _resumeBehind = null;
   startHls(url, ch, streamIdx);
+}
+
+function bufferedAround(vid) {
+  // The buffered range playback is in (or about to enter), and how far ahead it runs.
+  const b = vid.buffered;
+  for (let i = 0; i < b.length; i++) {
+    if (vid.currentTime < b.end(i)) {
+      return { start: b.start(i), end: b.end(i), ahead: b.end(i) - Math.max(vid.currentTime, b.start(i)) };
+    }
+  }
+  return null;
+}
+
+function scheduleReconnect(url, ch, streamIdx, token, reason) {
+  // One reconnect per attempt: a clean end fires both LOADING_COMPLETE and 'ended'.
+  if (token !== _playToken || _retryTimerToken === token) return;
+  _retryTimerToken = token;
+  const vid = document.getElementById('vid');
+  // Remember how far behind live we were, so the new connection resumes at the
+  // same moment instead of replaying the provider's 27s back-buffer.
+  if (_resumeBehind === null) {
+    const r = vid.buffered.length ? vid.buffered.end(vid.buffered.length - 1) - vid.currentTime : null;
+    _resumeBehind = r !== null && r > 0 ? r : null;
+    _failedAt = Date.now();
+  }
+  if (_failingSince === null) _failingSince = Date.now();
+  if (Date.now() - _failingSince > GIVE_UP_AFTER_MS) {
+    const hasBackup = (ch.streams || []).length > streamIdx + 1;
+    hideSpinner();
+    showError('Stream unavailable — network error', hasBackup);
+    return;
+  }
+  _retryCount++;
+  const delay = Math.min(1000 * 2 ** (_retryCount - 1), 10000);
+  console.log(`[player] ${reason} — reconnect #${_retryCount} in ${delay}ms`);
+  showReconnecting();
+  _retryTimer = setTimeout(() => {
+    if (token === _playToken) startHls(url, ch, streamIdx);
+  }, delay);
 }
 
 async function startHls(url, ch, streamIdx) {
@@ -1401,6 +1452,7 @@ async function startHls(url, ch, streamIdx) {
   const token = ++_playToken;
   clearTimeout(_retryTimer);
   clearTimeout(_retryResetTimer);
+  clearInterval(_watchdogTimer);
 
   // Destroy existing player instance and give Threadfin a moment to release
   // the connection before opening the next one (avoids "no streams available")
@@ -1408,73 +1460,111 @@ async function startHls(url, ch, streamIdx) {
     hlsInstance.destroy();
     hlsInstance = null;
     vid.pause();
-    vid.src = '';
+    vid.removeAttribute('src');
     await new Promise(r => setTimeout(r, 400));
   } else {
     vid.pause();
-    vid.src = '';
+    vid.removeAttribute('src');
   }
+  if (token !== _playToken) return;
 
-  showSpinner();
+  if (_resumeBehind === null) showSpinner();
   hideError();
   resetCongestionState();
+  const signal = _congestionAbort.signal;
 
-  const isM3u8 = url.includes('.m3u8');
   const streams = ch.streams || [];
   const hasBackup = streams.length > streamIdx + 1;
-
   const type = url.includes('.m3u8') ? 'mse' : 'mpegts';
+  const reconnect = reason => scheduleReconnect(url, ch, streamIdx, token, reason);
 
-  if (mpegts.isSupported()) {
-    hlsInstance = mpegts.createPlayer(
-      { type, url, isLive: true },
-      {
-        enableWorker: false, lazyLoadMaxDuration: 3 * 60, seekType: 'range',
-        // Drop already-played video, or a two-hour match fills the browser's
-        // buffer and playback stutters or dies late on.
-        autoCleanupSourceBuffer: true,
-        autoCleanupMaxBackwardDuration: 60,
-        autoCleanupMinBackwardDuration: 30,
-      }
-    );
-    hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail, errInfo) => {
-      if (token !== _playToken) return;
-      // A short network blip shouldn't end the match — reconnect quietly a few
-      // times before giving up and showing the error screen.
-      if (_retryCount < MAX_AUTO_RETRIES) {
-        _retryCount++;
-        console.log(`[player] ${errType}/${errDetail} — reconnect ${_retryCount}/${MAX_AUTO_RETRIES}`);
-        showSpinner();
-        _retryTimer = setTimeout(() => {
-          if (token === _playToken) startHls(url, ch, streamIdx);
-        }, 1000 * _retryCount);
-        return;
-      }
-      hideSpinner();
-      showError('Stream unavailable — network error', hasBackup);
-    });
-    hlsInstance.attachMediaElement(vid);
-    hlsInstance.load();
-    vid.style.display = 'block';
-    vid.addEventListener('canplay', () => {
-      hideSpinner();
-      vid.play().catch(() => {});
-    }, { once: true });
-  } else {
+  if (!mpegts.isSupported()) {
     // Fallback: native (Safari HLS)
     vid.src = url;
     vid.style.display = 'block';
-    vid.addEventListener('canplay', () => {
-      hideSpinner();
-      vid.play().catch(() => {});
-    }, { once: true });
-    vid.addEventListener('error', () => {
-      hideSpinner();
-      showError('Stream unavailable', hasBackup);
-    }, { once: true });
+    vid.addEventListener('canplay', () => { hideSpinner(); vid.play().catch(() => {}); }, { once: true, signal });
+    vid.addEventListener('error', () => { hideSpinner(); showError('Stream unavailable', hasBackup); }, { once: true, signal });
+    attachCongestionListeners(hasBackup);
+    return;
   }
 
+  hlsInstance = mpegts.createPlayer(
+    { type, url, isLive: true },
+    {
+      // enableWorker breaks here: the worker runs from a blob: URL, so our relative
+      // /proxy/stream URL never resolves and every load fails before reaching the server.
+      enableWorker: false,
+      liveBufferLatencyChasing: false, // never speed up or jump toward live — that would eat the cushion
+      // Drop already-played video so a two-hour match doesn't fill the browser's
+      // buffer quota; the forward cushion needs the room.
+      autoCleanupSourceBuffer: true,
+      autoCleanupMaxBackwardDuration: 20,
+      autoCleanupMinBackwardDuration: 10,
+    }
+  );
+  hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail) => reconnect(`${errType}/${errDetail}`));
+  // A cleanly closed upstream is not an error to mpegts.js: it plays out the
+  // buffer and stops on the last frame for good. Treat it like one.
+  hlsInstance.on(mpegts.Events.LOADING_COMPLETE, () => reconnect('stream ended'));
+  vid.addEventListener('ended', () => reconnect('playback ended'), { signal });
+  hlsInstance.attachMediaElement(vid);
+  hlsInstance.load();
+
+  // Hold playback until the cushion has arrived, then start from the oldest
+  // buffered moment — or, after a reconnect, from where the viewer left off.
+  vid.addEventListener('canplay', async () => {
+    const t0 = Date.now();
+    const target = _resumeBehind !== null
+      ? Math.min(_resumeBehind + (Date.now() - _failedAt) / 1000, 60)
+      : START_CUSHION_S;
+    while (token === _playToken && Date.now() - t0 < START_WAIT_MAX_MS) {
+      const b = vid.buffered;
+      if (b.length && b.end(b.length - 1) - b.start(0) >= Math.min(target, START_CUSHION_S)) break;
+      await new Promise(r => setTimeout(r, 250));
+    }
+    if (token !== _playToken || !vid.buffered.length) return;
+    const start = vid.buffered.start(0), end = vid.buffered.end(vid.buffered.length - 1);
+    vid.currentTime = _resumeBehind !== null ? Math.max(start, end - target) : start;
+    _resumeBehind = null;
+    vid.style.display = 'block';
+    hideSpinner();
+    vid.play().catch(() => {});
+    startWatchdog(vid, token, reconnect);
+  }, { once: true, signal });
+
+  // Healthy for 10s → forget past failures.
+  vid.addEventListener('playing', () => {
+    clearTimeout(_retryResetTimer);
+    _retryResetTimer = setTimeout(() => { _retryCount = 0; _failingSince = null; }, 10000);
+  }, { signal });
+
   attachCongestionListeners(hasBackup);
+}
+
+function startWatchdog(vid, token, reconnect) {
+  // Catches what mpegts.js never reports: a frozen picture, or a stop just short
+  // of a small hole in the buffer (typical right after an upstream reconnect).
+  let lastTime = vid.currentTime, frozenSince = null;
+  clearInterval(_watchdogTimer);
+  _watchdogTimer = setInterval(() => {
+    if (token !== _playToken) { clearInterval(_watchdogTimer); return; }
+    if (vid.paused) { frozenSince = null; return; }   // paused by the viewer
+    if (vid.currentTime !== lastTime) { lastTime = vid.currentTime; frozenSince = null; return; }
+
+    const b = vid.buffered;
+    for (let i = 0; i < b.length; i++) {
+      if (b.start(i) > vid.currentTime && b.start(i) - vid.currentTime < 2) {
+        console.log(`[player] skipping ${(b.start(i) - vid.currentTime).toFixed(2)}s gap`);
+        vid.currentTime = b.start(i) + 0.05;
+        return;
+      }
+    }
+    frozenSince = frozenSince || Date.now();
+    if (Date.now() - frozenSince > STALL_RECONNECT_S * 1000) {
+      clearInterval(_watchdogTimer);
+      reconnect(`picture frozen ${STALL_RECONNECT_S}s`);
+    }
+  }, 1000);
 }
 
 function tryNextBackup() {
@@ -1506,7 +1596,28 @@ function showSpinner() {
 }
 
 function hideSpinner() {
-  document.getElementById('spinnerWrap').style.display = 'none';
+  const wrap = document.getElementById('spinnerWrap');
+  wrap.style.display = 'none';
+  wrap.style.backgroundImage = '';
+  wrap.querySelector('.spinner-text').textContent = 'Loading stream…';
+}
+
+function showReconnecting() {
+  // Keep the last picture on screen, dimmed, instead of a black box.
+  const vid = document.getElementById('vid');
+  const wrap = document.getElementById('spinnerWrap');
+  try {
+    if (vid.videoWidth) {
+      const c = document.createElement('canvas');
+      c.width = vid.videoWidth / 2; c.height = vid.videoHeight / 2;
+      c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+      wrap.style.backgroundImage = `linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,.55)), url(${c.toDataURL('image/jpeg', 0.7)})`;
+      wrap.style.backgroundSize = 'cover';
+    }
+  } catch (_) {}
+  wrap.querySelector('.spinner-text').textContent = 'Reconnecting…';
+  wrap.style.display = 'flex';
+  hideError();
 }
 
 function showError(msg, hasBackup = false) {
@@ -1544,6 +1655,8 @@ function stopPlaying() {
   _playToken++;
   clearTimeout(_retryTimer);
   clearTimeout(_retryResetTimer);
+  clearInterval(_watchdogTimer);
+  _resumeBehind = null;
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
   const vid = document.getElementById('vid');
   vid.pause();
@@ -1602,8 +1715,11 @@ function congestionTryBackup() {
 function attachCongestionListeners(hasBackup) {
   const vid = document.getElementById('vid');
 
+  let started = false;
+  vid.addEventListener('playing', () => { started = true; }, { signal: _congestionAbort.signal });
   vid.addEventListener('waiting', function onWaiting() {
-    if (_congestionDismissed) return;
+    // Startup and reconnects always fire 'waiting'; only stalls mid-playback count.
+    if (_congestionDismissed || !started) return;
     const now = Date.now();
     _stallTimestamps.push(now);
     // Keep only stalls in the last 30 seconds
