@@ -115,9 +115,13 @@ async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     # Migrate: add columns that may not exist in older DBs
     with engine.connect() as conn:
-        for col, ddl in [("last_login", "DATETIME"), ("login_count", "INTEGER DEFAULT 0")]:
+        for table, col, ddl in [
+            ("user", "last_login", "DATETIME"),
+            ("user", "login_count", "INTEGER DEFAULT 0"),
+            ("streamquality", "lower_streak", "INTEGER DEFAULT 0"),
+        ]:
             try:
-                conn.exec_driver_sql(f"ALTER TABLE user ADD COLUMN {col} {ddl}")
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
                 conn.commit()
             except Exception:
                 pass  # Column already exists

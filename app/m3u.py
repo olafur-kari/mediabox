@@ -222,6 +222,8 @@ def _rank_streams(streams: List[Dict], quality_map: Dict[str, Dict]) -> List[Dic
     streams.sort(key=lambda s: (
         1 if s["height"] > MAX_AUTO_HEIGHT else 0,
         -s["height"] if s["height"] <= MAX_AUTO_HEIGHT else s["height"],
+        # Same resolution: prefer h264, which every browser decodes; HEVC often won't play.
+        1 if s["codec"] == "hevc" else 0,
         -_QUALITY_RANK.get(s["quality"], 0),
     ))
 

@@ -63,3 +63,6 @@ class StreamQuality(SQLModel, table=True):
     height: int = 0
     codec: str = ""
     measured_at: datetime = Field(default_factory=datetime.utcnow)
+    # Consecutive probes that came back lower than the stored height. Feeds sometimes
+    # dip to 720p for a moment, so one low reading is not trusted on its own.
+    lower_streak: int = 0

@@ -16,11 +16,12 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from app.m3u import get_cached_channels
-from app.models import Favorite, RecentlyWatched, StreamQuality
+from app.models import Favorite, ProviderChannel, RecentlyWatched, StreamQuality
 
 PROBE_HOUR = int(os.environ.get("QUALITY_PROBE_HOUR", "4"))     # local hour to run
 PROBE_TIMEOUT = int(os.environ.get("QUALITY_PROBE_TIMEOUT", "25"))
 PROBE_GAP = int(os.environ.get("QUALITY_PROBE_GAP", "5"))       # seconds between probes
+DEMOTE_AFTER = 2                                                # low readings in a row before demoting
 
 
 async def probe_stream(url: str):
@@ -60,15 +61,30 @@ def _watched_channel_ids(engine) -> set:
 
 
 def probe_targets(engine) -> list:
-    """(guide_name, url) for every variant of a channel somebody watches."""
+    """(guide_name, provider url) for every variant of a channel somebody watches.
+
+    Probes go straight to the provider, never through Threadfin: when ffprobe hangs
+    up after a few seconds Threadfin sometimes leaves its ffmpeg running, and that
+    orphan holds the line's only connection for hours. The provider then cuts the
+    real viewer off every few seconds and the player replays the last 5-10 seconds.
+    Lineup GuideNames are the provider's own stream names, so the search index maps
+    them to direct URLs.
+    """
     wanted = _watched_channel_ids(engine)
+    with Session(engine) as session:
+        direct = {r.name: r.url for r in session.exec(select(ProviderChannel)).all()}
     targets = []
     for ch in get_cached_channels():
         if ch["id"] not in wanted:
             continue
         for s in ch.get("streams", []):
-            if s.get("guide_name") and s.get("url"):
-                targets.append((s["guide_name"], s["url"]))
+            name = s.get("guide_name")
+            if not name:
+                continue
+            if name in direct:
+                targets.append((name, direct[name]))
+            else:
+                print(f"[quality]   {name} -> skipped, no direct provider URL")
     return targets
 
 
@@ -86,14 +102,27 @@ async def run_quality_probe(engine) -> int:
         if result:
             with Session(engine) as session:
                 row = session.get(StreamQuality, guide_name) or StreamQuality(guide_name=guide_name)
-                row.width = result["width"]
-                row.height = result["height"]
-                row.codec = result["codec"]
+                # A feed that is normally 1080p sometimes answers at 720p for one probe.
+                # Only demote it after DEMOTE_AFTER low readings in a row, otherwise a
+                # single bad night makes the worse variant the default.
+                if row.height and result["height"] < row.height:
+                    row.lower_streak = (row.lower_streak or 0) + 1
+                else:
+                    row.lower_streak = 0
+                kept = 0 < row.lower_streak < DEMOTE_AFTER
+                if kept:
+                    note = f"(kept {row.height}p, low reading {row.lower_streak}/{DEMOTE_AFTER})"
+                else:
+                    row.width = result["width"]
+                    row.height = result["height"]
+                    row.codec = result["codec"]
+                    row.lower_streak = 0
+                    note = ""
                 row.measured_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 session.add(row)
                 session.commit()
             measured += 1
-            print(f"[quality]   {guide_name} -> {result['width']}x{result['height']} {result['codec']}")
+            print(f"[quality]   {guide_name} -> {result['width']}x{result['height']} {result['codec']} {note}".rstrip())
         else:
             print(f"[quality]   {guide_name} -> no answer")
         await asyncio.sleep(PROBE_GAP)
