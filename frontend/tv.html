@@ -1100,8 +1100,11 @@ async function init() {
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+// Event/PPV channels played straight from search; they aren't in the lineup.
+const transientChannels = {};
+
 function findChannel(id) {
-  return allChannels.find(c => c.id === id);
+  return allChannels.find(c => c.id === id) || transientChannels[id];
 }
 
 function bestStreamIdx(streams) {
@@ -1334,9 +1337,11 @@ async function playChannel(channelId) {
   currentChannelId = channelId;
   activeStreamIdx = bestStreamIdx(ch.streams || []);
 
-  // Update recently watched
-  recentIds = [channelId, ...recentIds.filter(r => r !== channelId)].slice(0, 10);
-  try { await fetch(`/api/recent/${channelId}`, { method: 'POST' }); } catch (_) {}
+  // Update recently watched (one-off event channels would only clutter it)
+  if (!transientChannels[channelId]) {
+    recentIds = [channelId, ...recentIds.filter(r => r !== channelId)].slice(0, 10);
+    try { await fetch(`/api/recent/${channelId}`, { method: 'POST' }); } catch (_) {}
+  }
 
   // Now bar
   document.getElementById('nowBar').style.display = 'flex';
@@ -1755,20 +1760,79 @@ function renderChannelResult(ch, q) {
     </div>`;
 }
 
-function renderEpgResult(r, q) {
-  const chName = r.channel_name.replace(/^[A-Z]{2}\s*:\s*/, '');
-  const timeStr = r.live ? '● LIVE' : formatMinsUntil(r.minutes_until);
+// Search shows English channels only; other languages appear only when nothing
+// English matches the name at all.
+const ENGLISH_COUNTRIES = new Set(['UK', 'US', 'AU', 'CA', 'IE']);
+const LANG_LABELS = { NO: '🇳🇴 Norwegian commentary', SE: '🇸🇪 Swedish commentary', DK: '🇩🇰 Danish commentary' };
+
+function formatWhen(iso, live) {
+  if (live) return '● LIVE';
+  const d = new Date(iso);
+  const mins = Math.round((d - new Date()) / 60000);
+  if (mins <= 0) return '● LIVE';
+  if (mins < 12 * 60) return formatMinsUntil(mins);
+  return d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderMatchResult(r, q) {
+  const when = formatWhen(r.start, r.live);
+  const isLive = when === '● LIVE';
+  const meta = [r.channel_name, r.also_on ? `+${r.also_on} more` : '', LANG_LABELS[r.lang] || '']
+    .filter(Boolean).join(' · ');
+  const desc = r.desc ? `<div class="search-item-meta">${hl(r.desc.slice(0, 110), q)}</div>` : '';
   return `
     <div class="search-item" onclick="selectSearch('${escHtml(r.channel_id)}')">
-      <div class="search-item-logo">${escHtml(chName.slice(0, 4).toUpperCase())}</div>
+      <div class="search-item-logo">${escHtml(r.channel_name.slice(0, 4).toUpperCase())}</div>
       <div class="search-item-info">
         <div class="search-item-name">${hl(r.title, q)}</div>
-        <div class="search-item-meta">${escHtml(chName)}</div>
+        <div class="search-item-meta">${escHtml(meta)}</div>
+        ${desc}
       </div>
       <div class="search-item-right">
-        <span class="epg-time ${r.live ? 'live' : ''}">${timeStr}</span>
+        <span class="epg-time ${isLive ? 'live' : ''}">${escHtml(when)}</span>
       </div>
     </div>`;
+}
+
+function renderEventResult(ev, q) {
+  const when = formatWhen(ev.start, false);
+  // "AU (STAN 19) | Arsenal v Leeds ... (2026-10-10 21:30:29)" → the fixture part
+  const clean = ev.name
+    .replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '')
+    .replace(/^[^|]*\|\s*[•·]?\s*/, '')
+    .trim() || ev.name;
+  const source = (ev.group || '').replace(/^\|[A-Z]{2,3}\|\s*/, '');
+  return `
+    <div class="search-item" onclick="playEvent(${ev.id}, '${escHtml(clean).replace(/'/g, "\\'")}')">
+      <div class="search-item-logo">PPV</div>
+      <div class="search-item-info">
+        <div class="search-item-name">${hl(clean, q)}</div>
+        <div class="search-item-meta">${escHtml(source)} · event channel</div>
+      </div>
+      <div class="search-item-right">
+        <span class="epg-time ${when === '● LIVE' ? 'live' : ''}">${escHtml(when)}</span>
+      </div>
+    </div>`;
+}
+
+function playEvent(providerId, name) {
+  const id = `event-${providerId}`;
+  transientChannels[id] = {
+    id, name, logo: 'PPV', show: '', group: 'Event',
+    streams: [{ label: 'Event', url: `/proxy/stream/${id}`, health: 'unknown' }],
+  };
+  selectSearch(id);
+}
+
+function channelResults(rawQ) {
+  const scored = allChannels
+    .map(ch => ({ ch, score: scoreChannel(ch, rawQ) }))
+    .filter(x => x.score > 0);
+  const english = scored.filter(x => ENGLISH_COUNTRIES.has(x.ch.country));
+  return (english.length ? english : scored)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(x => x.ch);
 }
 
 async function renderDropdown() {
@@ -1777,141 +1841,49 @@ async function renderDropdown() {
   if (!q) { searchDropdown.classList.remove('open'); return; }
   searchFocusIdx = -1;
 
-  const chResults = allChannels
-    .map(ch => ({ ch, score: scoreChannel(ch, rawQ) }))
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8)
-    .map(x => x.ch);
+  const chResults = channelResults(rawQ);
+  const channelsHtml = chResults.length
+    ? `<div class="search-results-label">Channels</div>` + chResults.map(ch => renderChannelResult(ch, q)).join('')
+    : '';
 
-  // Render channel results immediately (no waiting)
-  let html = '';
-  if (chResults.length) {
-    html += `<div class="search-results-label">Channels</div>`;
-    html += chResults.map(ch => renderChannelResult(ch, q)).join('');
-  }
-  html += renderCustomSection(rawQ, q);
-  searchDropdown.innerHTML = html || `<div class="search-no-results">Searching…</div>`;
+  // Channel names render instantly; games need the guide and event catalogue.
+  searchDropdown.innerHTML = channelsHtml + `<div class="search-no-results">Finding games…</div>`;
   searchDropdown.classList.add('open');
 
-  // Guide and provider catalogue in parallel.
-  // The provider search runs ALWAYS, not just as a fallback: live fixtures live on
-  // event/PPV channels that are not in the lineup, so gating them behind "nothing
-  // else matched" hid the actual match whenever a loosely-named channel matched first.
+  let data = null;
   try {
-    const [epgResults, providerResults] = await Promise.all([
-      fetch(`/api/epg/search?q=${encodeURIComponent(rawQ)}`).then(r => r.json()).catch(() => []),
-      fetch(`/api/provider-search?q=${encodeURIComponent(rawQ)}`).then(r => r.json()).catch(() => []),
-    ]);
-    if (searchInput.value.trim() !== rawQ) return; // Query changed while fetching
+    const resp = await fetch(`/api/search?q=${encodeURIComponent(rawQ)}`);
+    if (resp.ok) data = await resp.json();
+  } catch (_) {}
+  if (searchInput.value.trim() !== rawQ) return; // Query changed while fetching
 
-    let newHtml = '';
-    if (chResults.length) {
-      newHtml += `<div class="search-results-label">Channels</div>`;
-      newHtml += chResults.map(ch => renderChannelResult(ch, q)).join('');
+  let html = channelsHtml;
+  if (!data) {
+    html += `<div class="search-no-results">Couldn't load games — the server may be restarting. Try again in a few seconds.</div>`;
+  } else {
+    // Guide listings and event channels in one list, live first, then by kick-off.
+    const games = [
+      ...data.matches.map(r => ({ start: r.start, live: r.live, html: renderMatchResult(r, q) })),
+      ...data.events.map(e => ({ start: e.start, live: false, html: renderEventResult(e, q) })),
+    ].sort((a, b) => (b.live - a.live) || (new Date(a.start) - new Date(b.start)));
+    if (games.length) {
+      html += `<div class="search-results-label">Games — live &amp; upcoming</div>`;
+      html += games.slice(0, 15).map(g => g.html).join('');
     }
-    if (epgResults.length) {
-      newHtml += `<div class="search-results-label">On Now &amp; Coming Up</div>`;
-      newHtml += epgResults.slice(0, 8).map(r => renderEpgResult(r, q)).join('');
-    }
-    if (providerResults.length) {
-      newHtml += `<div class="search-results-label">Events &amp; PPV — not in your lineup</div>`;
-      newHtml += providerResults.slice(0, 10).map(ch => renderProviderResult(ch, q)).join('');
-    }
-    if (!chResults.length && !epgResults.length && !providerResults.length) {
-      newHtml = `<div class="search-no-results">No results for "<strong>${escHtml(rawQ)}</strong>"</div>`;
-    }
-    newHtml += renderCustomSection(rawQ, q);
-    searchDropdown.innerHTML = newHtml;
-    searchDropdown.classList.add('open');
-  } catch (_) {
-    // Leave the channel results already on screen
-  }
-}
-
-
-function renderProviderResult(ch, q) {
-  // Event channels carry the fixture and kick-off in the name itself
-  const timeMatch = ch.name.match(/\((\d{4}-\d{2}-\d{2} \d{2}:\d{2})(?::\d{2})?\)/);
-  let when = '';
-  if (timeMatch) {
-    const d = new Date(timeMatch[1].replace(' ', 'T') + 'Z');
-    if (!isNaN(d)) {
-      const mins = Math.round((d - new Date()) / 60000);
-      when = mins < -150 ? 'ended'
-           : mins <= 0 ? '● LIVE'
-           : mins < 60 ? `in ${mins}min`
-           : d.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    if (!chResults.length && !games.length) {
+      html = `<div class="search-no-results">Nothing live or coming up for "<strong>${escHtml(rawQ)}</strong>"</div>`;
     }
   }
-  const clean = ch.name.replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '');
-  return `
-    <div class="search-item provider-result">
-      <div class="search-item-logo">${escHtml(clean.slice(0, 4).toUpperCase())}</div>
-      <div class="search-item-info">
-        <div class="search-item-name">${hl(clean, q)}</div>
-        <div class="search-item-meta">${escHtml(ch.group || '')}</div>
-      </div>
-      <div class="search-item-right">
-        ${when ? `<span class="epg-time ${when === '● LIVE' ? 'live' : ''}">${escHtml(when)}</span>` : ''}
-        <button class="search-add-btn-inline" onclick="addProviderChannel(${ch.id}, '${escHtml(ch.name).replace(/'/g, "\\'")}', '${escHtml(ch.url)}')">+ Add</button>
-      </div>
-    </div>`;
+  searchDropdown.innerHTML = html;
+  searchDropdown.classList.add('open');
 }
 
-function renderCustomSection(rawQ, q) {
-  const matched = customChannels.filter(c => norm(c.name).includes(q));
-  let html = `<div class="search-results-label">Custom Channels</div>`;
-  html += matched.map(c => `
-    <div class="search-item" onclick="selectSearch('custom-${c.id}')">
-      <div class="search-item-logo">${escHtml(c.name.slice(0,4).toUpperCase())}</div>
-      <div class="search-item-info">
-        <div class="search-item-name">${hl(c.name, q)}</div>
-        <div class="search-item-meta">Custom</div>
-      </div>
-    </div>`).join('');
-  html += `<div class="search-add-row" onclick="openAddChannel(${JSON.stringify(rawQ)})">
-    <div class="search-add-icon">+</div>
-    <span>Add "${escHtml(rawQ)}" as custom channel</span>
-  </div>`;
-  return html;
-}
 
 function selectSearch(channelId) {
   searchInput.value = '';
   searchDropdown.classList.remove('open');
   searchInput.blur();
   playChannel(channelId);
-}
-
-async function searchProviderChannels(q) {
-  try {
-    const resp = await fetch(`/api/provider-search?q=${encodeURIComponent(q)}`);
-    const results = await resp.json();
-    // Only update if the query hasn't changed
-    if (searchInput.value.trim() !== q) return;
-    if (!results.length) {
-      searchDropdown.innerHTML = `<div class="search-no-results">No channels found for "<strong>${escHtml(q)}</strong>"</div>`;
-    } else {
-      searchDropdown.innerHTML = `
-        <div class="search-results-label">From provider — not in your lineup</div>
-        ${results.map(ch => `
-          <div class="search-item provider-result">
-            <div class="search-item-logo">${escHtml(ch.name.slice(0,4).toUpperCase())}</div>
-            <div class="search-item-info">
-              <div class="search-item-name">${hl(ch.name.replace(/^[A-Z]{2}\s*:\s*/, ''), q)}</div>
-              <div class="search-item-meta">${escHtml(ch.group)}</div>
-            </div>
-            <div class="search-item-right">
-              <button class="search-add-btn-inline" onclick="addProviderChannel(${ch.id}, '${escHtml(ch.name)}', '${escHtml(ch.url)}')">+ Add</button>
-            </div>
-          </div>
-        `).join('')}
-      `;
-    }
-  } catch (_) {
-    searchDropdown.innerHTML = `<div class="search-no-results">Provider search unavailable</div>`;
-  }
 }
 
 async function addProviderChannel(providerId, name, url) {

@@ -215,3 +215,65 @@ def search_provider_channels(engine, query: str, limit: int = 50):
     ]
     rows.sort(key=lambda r: _event_rank(r["name"]))
     return rows[:limit]
+
+
+# Event channels whose commentary is English, by the region tag on their category:
+# "|UK| PSF PPV", "|AU| STAN PPV", "|NA| PPV LIVE EVENT".
+_ENGLISH_EVENT_REGIONS = {"UK", "AU", "NA", "US", "USA", "IE", "CA"}
+_REGION_TAG = re.compile(r"^\|?\s*([A-Z]{2,3})\s*[|:\-]")
+# Listed times are local to the event's region. Australian Stan PPV lists Sydney
+# time: "Arsenal v Leeds (2026-10-10 22:20)" is the 12:30 BST kick-off. Regions not
+# listed here are taken as UTC.
+_REGION_TZ = {"AU": "Australia/Sydney"}
+# The other date style in event names: "| Sat 09 Aug 15:45 |"
+_EVENT_DAY_TIME = re.compile(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}\s+[A-Z][a-z]{2})\s+(\d{1,2}:\d{2})\b")
+
+
+def _event_start(name: str):
+    """Kick-off from an event name (UTC, as the provider lists it), or None."""
+    from datetime import datetime
+    m = _EVENT_TIME.search(name)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
+    m = _EVENT_DAY_TIME.search(name)
+    if m:
+        now = datetime.utcnow()
+        # No year in the name: pick whichever year puts it closest to today.
+        candidates = []
+        for year in (now.year - 1, now.year, now.year + 1):
+            try:
+                candidates.append(datetime.strptime(f"{m.group(1)} {year} {m.group(2)}", "%d %b %Y %H:%M"))
+            except ValueError:
+                pass
+        if candidates:
+            return min(candidates, key=lambda d: abs(d - now))
+    return None
+
+
+def search_events(engine, query: str, limit: int = 10):
+    """Upcoming or live English-language event/PPV channels for a search.
+
+    Undated and finished events are dropped: the catalogue keeps placeholders from
+    months ago ("ARSENAL - ATHLETIC CLUB BILBAO | Sat 09 Aug") that look like
+    tonight's game but aren't.
+    """
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    rows = []
+    for r in search_provider_channels(engine, query, limit=200):
+        m = _REGION_TAG.match(r["group"] or "")
+        if not m or m.group(1) not in _ENGLISH_EVENT_REGIONS:
+            continue
+        start = _event_start(r["name"])
+        if start and m.group(1) in _REGION_TZ:
+            from zoneinfo import ZoneInfo
+            start = (start.replace(tzinfo=ZoneInfo(_REGION_TZ[m.group(1)]))
+                     .astimezone(ZoneInfo("UTC")).replace(tzinfo=None))
+        if not start or start < now - timedelta(hours=3):
+            continue
+        rows.append({**r, "start": start.isoformat() + "Z"})
+    rows.sort(key=lambda r: r["start"])
+    return rows[:limit]

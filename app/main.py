@@ -24,10 +24,10 @@ from app.auth import (
     hash_password,
     verify_password,
 )
-from app.epg import fetch_epg, epg_refresh_loop, search_epg, epg_window_hours
+from app.epg import fetch_epg, epg_refresh_loop, search_epg, search_matches, epg_window_hours
 from app.m3u import fetch_channels, get_cached_channels, get_cached_groups, get_channel_by_id
 from app.models import CustomChannel, Favorite, ProviderChannel, RecentlyWatched, StreamQuality, User, WatchKeyword
-from app.provider import fetch_provider_channels, provider_refresh_loop, search_provider_channels
+from app.provider import fetch_provider_channels, provider_refresh_loop, search_events, search_provider_channels
 from app.quality import quality_probe_loop, run_quality_probe
 
 # Container default; override for a local run (see run-local.sh)
@@ -239,7 +239,7 @@ def _resolve_threadfin_url(url: str) -> str:
 
 @app.get("/api/stream/{channel_id}")
 async def api_stream(channel_id: str, stream_idx: int = 0, current_user: dict = Depends(get_current_user)):
-    if channel_id.startswith("custom-"):
+    if channel_id.startswith(("custom-", "event-")):
         return {"url": f"/proxy/stream/{channel_id}", "channel_id": channel_id}
     ch = get_channel_by_id(channel_id)
     if not ch:
@@ -335,6 +335,14 @@ async def proxy_stream(request: Request, channel_id: str, stream_idx: int = 0, m
         if not custom_ch:
             raise HTTPException(status_code=404, detail="Channel not found")
         url = custom_ch.url
+    elif channel_id.startswith("event-"):
+        # Event/PPV channels aren't in the lineup; play them straight from the
+        # provider's catalogue instead of making the user save them first.
+        with Session(engine) as s:
+            event_ch = s.get(ProviderChannel, int(channel_id[6:]))
+        if not event_ch:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        url = event_ch.url
     else:
         ch = get_channel_by_id(channel_id)
         if not ch:
@@ -507,6 +515,20 @@ async def api_epg_search(q: str, current_user: dict = Depends(get_current_user))
         return []
     channels_by_id = {ch["id"]: ch for ch in get_cached_channels()}
     return search_epg(q, channels_by_id)
+
+
+# ── Search API ────────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+async def api_search(q: str, current_user: dict = Depends(get_current_user)):
+    """Games for a search: guide listings and event channels, English first."""
+    if len(q.strip()) < 2:
+        return {"matches": [], "events": []}
+    channels_by_id = {ch["id"]: ch for ch in get_cached_channels()}
+    return {
+        "matches": search_matches(q, channels_by_id),
+        "events": search_events(engine, q),
+    }
 
 
 # ── Provider Search API ───────────────────────────────────────────────────────
