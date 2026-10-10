@@ -1021,7 +1021,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.min.js"></script>
 <script>
 // ── State ────────────────────────────────────────────────────────────────────
 let groups = [];           // [{id, name, flag, channels:[...]}]
@@ -1036,6 +1036,12 @@ let currentChannelId = null;
 let activeStreamIdx = 0;
 let searchFocusIdx = -1;
 let hlsInstance = null;
+// Quiet reconnects after a playback error, before the error screen is shown.
+const MAX_AUTO_RETRIES = 3;
+let _retryCount = 0;
+let _retryTimer = null;
+let _retryResetTimer = null;
+let _playToken = 0;              // bumps on every start, so a stale retry can't fire
 
 // ── Congestion detection state ────────────────────────────────────────────────
 let _stallTimestamps = [];       // rolling window of stall event times
@@ -1381,11 +1387,15 @@ async function loadStream(channelId, streamIdx) {
     return;
   }
 
+  _retryCount = 0;
   startHls(url, ch, streamIdx);
 }
 
 async function startHls(url, ch, streamIdx) {
   const vid = document.getElementById('vid');
+  const token = ++_playToken;
+  clearTimeout(_retryTimer);
+  clearTimeout(_retryResetTimer);
 
   // Destroy existing player instance and give Threadfin a moment to release
   // the connection before opening the next one (avoids "no streams available")
@@ -1413,9 +1423,28 @@ async function startHls(url, ch, streamIdx) {
   if (mpegts.isSupported()) {
     hlsInstance = mpegts.createPlayer(
       { type, url, isLive: true },
-      { enableWorker: false, lazyLoadMaxDuration: 3 * 60, seekType: 'range' }
+      {
+        enableWorker: false, lazyLoadMaxDuration: 3 * 60, seekType: 'range',
+        // Drop already-played video, or a two-hour match fills the browser's
+        // buffer and playback stutters or dies late on.
+        autoCleanupSourceBuffer: true,
+        autoCleanupMaxBackwardDuration: 60,
+        autoCleanupMinBackwardDuration: 30,
+      }
     );
     hlsInstance.on(mpegts.Events.ERROR, (errType, errDetail, errInfo) => {
+      if (token !== _playToken) return;
+      // A short network blip shouldn't end the match — reconnect quietly a few
+      // times before giving up and showing the error screen.
+      if (_retryCount < MAX_AUTO_RETRIES) {
+        _retryCount++;
+        console.log(`[player] ${errType}/${errDetail} — reconnect ${_retryCount}/${MAX_AUTO_RETRIES}`);
+        showSpinner();
+        _retryTimer = setTimeout(() => {
+          if (token === _playToken) startHls(url, ch, streamIdx);
+        }, 1000 * _retryCount);
+        return;
+      }
       hideSpinner();
       showError('Stream unavailable — network error', hasBackup);
     });
@@ -1507,6 +1536,9 @@ function renderStreamPicker(ch) {
 }
 
 function stopPlaying() {
+  _playToken++;
+  clearTimeout(_retryTimer);
+  clearTimeout(_retryResetTimer);
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
   const vid = document.getElementById('vid');
   vid.pause();
@@ -1585,6 +1617,8 @@ function attachCongestionListeners(hasBackup) {
   }, { signal: _congestionAbort.signal });
 
   vid.addEventListener('playing', function onPlaying() {
+    clearTimeout(_retryResetTimer);
+    _retryResetTimer = setTimeout(() => { _retryCount = 0; }, 30000);
     clearTimeout(_stallSustainTimer);
     _stallSustainTimer = null;
     // Grace period: hide toast only if playback stays stable for 3s
